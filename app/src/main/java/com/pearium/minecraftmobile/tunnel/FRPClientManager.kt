@@ -22,7 +22,7 @@ enum class TunnelStatus {
 }
 
 data class TunnelConfig(
-    val serverHost: String = "pearium.com",
+    val serverHost: String = "34.185.160.5",
     val serverPort: Int = 7000,
     val token: String = "pearium-mc-secret-2026",
     val localPort: Int = 25565,
