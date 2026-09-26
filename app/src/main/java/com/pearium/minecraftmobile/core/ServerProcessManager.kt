@@ -32,6 +32,7 @@ class ServerProcessManager(
     private var process: Process? = null
     private var processWriter: BufferedWriter? = null
     private var statsJob: Job? = null
+    private val isDownloadInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val _serverState = MutableStateFlow(ServerState())
     val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
@@ -115,6 +116,10 @@ class ServerProcessManager(
         if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
             return
         }
+        if (isDownloadInProgress.get()) {
+            appendLog("[SILNIK] Nie można zmienić silnika podczas trwającego pobierania.")
+            return
+        }
         configManager.setSelectedEngine(engine)
         val version = configManager.getSelectedVersion(engine)
         val isInstalled = serverJarDownloader.isEngineVersionInstalled(engine, version)
@@ -140,6 +145,10 @@ class ServerProcessManager(
     }
 
     fun setSelectedVersion(version: String) {
+        if (isDownloadInProgress.get()) {
+            appendLog("[WERSJA] Nie można zmienić wersji podczas trwającego pobierania.")
+            return
+        }
         val engine = _serverState.value.selectedEngine
         configManager.setSelectedVersion(engine, version)
         val isInstalled = serverJarDownloader.isEngineVersionInstalled(engine, version)
@@ -165,38 +174,86 @@ class ServerProcessManager(
         if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
             return
         }
+        if (!isDownloadInProgress.compareAndSet(false, true)) {
+            appendLog("[POBIERANIE] Pobieranie silnika jest już w toku (${_serverState.value.downloadProgressPercent}%). Zignorowano powtórne kliknięcie.")
+            return
+        }
+
         scope.launch {
-            appendLog("=== POBIERANIE SILNIKA: ${engine.displayName} $version ===")
-            _serverState.update { it.copy(errorMessage = "Pobieranie informacji o ${engine.displayName} $version...") }
-            val downloadInfo = serverJarDownloader.fetchLatestDownloadInfo(engine, version)
-            if (downloadInfo == null) {
-                appendLog("[BŁĄD] Nie znaleziono informacji o pobieraniu dla ${engine.displayName} $version.")
-                _serverState.update { it.copy(errorMessage = "Błąd pobierania informacji o ${engine.displayName} $version.") }
-                onComplete(false)
-                return@launch
-            }
-            val (buildName, downloadUrl) = downloadInfo
-            appendLog("[${engine.displayName}] Pobieranie: $buildName z $downloadUrl")
-            val ok = serverJarDownloader.downloadServerJar(engine, version, downloadUrl) { percent, msg ->
-                _serverState.update { it.copy(errorMessage = msg) }
-                if (percent % 25 == 0 || percent == 100) {
-                    appendLog("[Pobieranie] $msg")
-                }
-            }
-            if (ok) {
+            try {
+                appendLog("=== POBIERANIE SILNIKA: ${engine.displayName} $version ===")
                 _serverState.update {
                     it.copy(
-                        isInstalled = true,
-                        installedVersion = version,
-                        selectedVersion = version,
-                        errorMessage = null
+                        isDownloading = true,
+                        downloadProgressPercent = 0,
+                        downloadStatusMessage = "Pobieranie informacji o ${engine.displayName} $version...",
+                        errorMessage = "Pobieranie informacji o ${engine.displayName} $version..."
                     )
                 }
-                appendLog("=== SILNIK ${engine.displayName.uppercase()} $version POBRANY POMYŚLNIE ===")
-                onComplete(true)
-            } else {
-                appendLog("[BŁĄD] Pobieranie silnika ${engine.displayName} nie powiodło się.")
+                val downloadInfo = serverJarDownloader.fetchLatestDownloadInfo(engine, version)
+                if (downloadInfo == null) {
+                    appendLog("[BŁĄD] Nie znaleziono informacji o pobieraniu dla ${engine.displayName} $version.")
+                    _serverState.update {
+                        it.copy(
+                            isDownloading = false,
+                            errorMessage = "Błąd pobierania informacji o ${engine.displayName} $version."
+                        )
+                    }
+                    onComplete(false)
+                    return@launch
+                }
+                val (buildName, downloadUrl) = downloadInfo
+                appendLog("[${engine.displayName}] Pobieranie: $buildName z $downloadUrl")
+                val ok = serverJarDownloader.downloadServerJar(engine, version, downloadUrl) { percent, msg ->
+                    _serverState.update {
+                        it.copy(
+                            errorMessage = msg,
+                            isDownloading = true,
+                            downloadProgressPercent = percent.coerceAtLeast(0),
+                            downloadStatusMessage = msg
+                        )
+                    }
+                    if (percent % 25 == 0 || percent == 100) {
+                        appendLog("[Pobieranie] $msg")
+                    }
+                }
+                if (ok) {
+                    _serverState.update {
+                        it.copy(
+                            isInstalled = true,
+                            installedVersion = version,
+                            selectedVersion = version,
+                            isDownloading = false,
+                            downloadProgressPercent = 100,
+                            downloadStatusMessage = null,
+                            errorMessage = null
+                        )
+                    }
+                    appendLog("=== SILNIK ${engine.displayName.uppercase()} $version POBRANY POMYŚLNIE ===")
+                    onComplete(true)
+                } else {
+                    _serverState.update {
+                        it.copy(
+                            isDownloading = false,
+                            downloadStatusMessage = null
+                        )
+                    }
+                    appendLog("[BŁĄD] Pobieranie silnika ${engine.displayName} nie powiodło się.")
+                    onComplete(false)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                appendLog("[BŁĄD] Wyjątek podczas pobierania: ${e.localizedMessage}")
+                _serverState.update {
+                    it.copy(
+                        isDownloading = false,
+                        errorMessage = "Błąd pobierania: ${e.localizedMessage}"
+                    )
+                }
                 onComplete(false)
+            } finally {
+                isDownloadInProgress.set(false)
+                _serverState.update { it.copy(isDownloading = false) }
             }
         }
     }
@@ -210,6 +267,10 @@ class ServerProcessManager(
         cores: Int = _serverState.value.allocatedCores
     ) {
         if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
+            return
+        }
+        if (isDownloadInProgress.get()) {
+            appendLog("[START] Pobieranie silnika jest w toku. Zaczekaj na zakończenie pobierania przed startem.")
             return
         }
 
@@ -262,45 +323,68 @@ class ServerProcessManager(
             val isInstalled = serverJarDownloader.isEngineVersionInstalled(engine, targetVersion)
 
             if (!serverJar.exists() || !isInstalled) {
-                appendLog("=== POBIERANIE SILNIKA ${engine.displayName.uppercase()} (Wersja $targetVersion) ===")
-                appendLog("[EULA] Automatycznie zatwierdzono eula.txt (eula=true).")
-                configManager.ensureEulaAccepted()
+                isDownloadInProgress.set(true)
+                try {
+                    appendLog("=== POBIERANIE SILNIKA ${engine.displayName.uppercase()} (Wersja $targetVersion) ===")
+                    appendLog("[EULA] Automatycznie zatwierdzono eula.txt (eula=true).")
+                    configManager.ensureEulaAccepted()
 
-                appendLog("[${engine.displayName}] Pobieranie informacji o silniku ${engine.displayName} $targetVersion...")
-                _serverState.update { it.copy(errorMessage = "Pobieranie silnika ${engine.displayName} $targetVersion...") }
-
-                val downloadInfo = serverJarDownloader.fetchLatestDownloadInfo(engine, targetVersion)
-                val buildName = downloadInfo?.first ?: "${engine.displayName} $targetVersion"
-                val downloadUrl = downloadInfo?.second ?: serverJarDownloader.getFallbackDownloadUrl(engine, targetVersion)
-
-                appendLog("[${engine.displayName}] Wybrany build: $buildName")
-                val success = serverJarDownloader.downloadServerJar(engine, targetVersion, downloadUrl) { percent, msg ->
-                    _serverState.update { it.copy(errorMessage = msg) }
-                    if (percent % 25 == 0 || percent == 100) {
-                        appendLog("[Pobieranie] $msg")
-                    }
-                }
-
-                if (!success || !serverJar.exists()) {
+                    appendLog("[${engine.displayName}] Pobieranie informacji o silniku ${engine.displayName} $targetVersion...")
                     _serverState.update {
                         it.copy(
-                            status = ServerStatus.ERROR,
-                            errorMessage = "Błąd pobierania silnika ${engine.displayName}. Sprawdź połączenie z Internetem."
+                            isDownloading = true,
+                            downloadProgressPercent = 0,
+                            downloadStatusMessage = "Pobieranie silnika ${engine.displayName} $targetVersion...",
+                            errorMessage = "Pobieranie silnika ${engine.displayName} $targetVersion..."
                         )
                     }
-                    appendLog("[BŁĄD] Nie udało się pobrać pliku silnika (${serverJar.name}).")
-                    return@launch
-                }
 
-                _serverState.update {
-                    it.copy(
-                        isInstalled = true,
-                        installedVersion = targetVersion,
-                        selectedVersion = targetVersion
-                    )
+                    val downloadInfo = serverJarDownloader.fetchLatestDownloadInfo(engine, targetVersion)
+                    val buildName = downloadInfo?.first ?: "${engine.displayName} $targetVersion"
+                    val downloadUrl = downloadInfo?.second ?: serverJarDownloader.getFallbackDownloadUrl(engine, targetVersion)
+
+                    appendLog("[${engine.displayName}] Wybrany build: $buildName")
+                    val success = serverJarDownloader.downloadServerJar(engine, targetVersion, downloadUrl) { percent, msg ->
+                        _serverState.update {
+                            it.copy(
+                                errorMessage = msg,
+                                isDownloading = true,
+                                downloadProgressPercent = percent.coerceAtLeast(0),
+                                downloadStatusMessage = msg
+                            )
+                        }
+                        if (percent % 25 == 0 || percent == 100) {
+                            appendLog("[Pobieranie] $msg")
+                        }
+                    }
+
+                    if (!success || !serverJar.exists()) {
+                        _serverState.update {
+                            it.copy(
+                                status = ServerStatus.ERROR,
+                                isDownloading = false,
+                                errorMessage = "Błąd pobierania silnika ${engine.displayName}. Sprawdź połączenie z Internetem."
+                            )
+                        }
+                        appendLog("[BŁĄD] Nie udało się pobrać pliku silnika (${serverJar.name}).")
+                        return@launch
+                    }
+
+                    _serverState.update {
+                        it.copy(
+                            isInstalled = true,
+                            installedVersion = targetVersion,
+                            selectedVersion = targetVersion,
+                            isDownloading = false,
+                            downloadStatusMessage = null
+                        )
+                    }
+                    appendLog("[${engine.displayName}] Silnik ${engine.displayName} $targetVersion pobrany pomyślnie (${serverJar.length() / (1024 * 1024)} MB)!")
+                    configManager.ensureEulaAccepted()
+                } finally {
+                    isDownloadInProgress.set(false)
+                    _serverState.update { it.copy(isDownloading = false) }
                 }
-                appendLog("[${engine.displayName}] Silnik ${engine.displayName} $targetVersion pobrany pomyślnie (${serverJar.length() / (1024 * 1024)} MB)!")
-                configManager.ensureEulaAccepted()
             }
 
             _serverState.update { it.copy(errorMessage = null) }

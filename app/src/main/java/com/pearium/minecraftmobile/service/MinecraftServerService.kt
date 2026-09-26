@@ -135,9 +135,10 @@ class MinecraftServerService : Service() {
     }
 
     private fun updateNotification(status: ServerStatus, players: Int, ramGb: Float) {
+        val engineName = processManager.serverState.value.selectedEngine.displayName
         val title = when (status) {
-            ServerStatus.RUNNING -> "Serwer Folia Aktywny (${players} graczy)"
-            ServerStatus.STARTING -> "Startowanie serwera Folia..."
+            ServerStatus.RUNNING -> "Serwer $engineName Aktywny (${players} graczy)"
+            ServerStatus.STARTING -> "Startowanie serwera $engineName..."
             ServerStatus.STOPPING -> "Zatrzymywanie serwera..."
             ServerStatus.STOPPED -> "Serwer zatrzymany"
             ServerStatus.ERROR -> "Błąd działania serwera"

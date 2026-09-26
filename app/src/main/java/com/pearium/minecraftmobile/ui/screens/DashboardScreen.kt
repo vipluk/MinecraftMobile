@@ -39,6 +39,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -228,7 +229,7 @@ fun DashboardScreen(
                 ) {
                     Column {
                         Text(
-                            text = "Minecraft Folia Mobile",
+                            text = "Minecraft ${serverState.selectedEngine.displayName} Mobile",
                             color = TextPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 19.sp
@@ -400,7 +401,7 @@ fun DashboardScreen(
                                     color = if (isSelected) MintAccent else CardBorder,
                                     shape = RoundedCornerShape(10.dp)
                                 )
-                                .clickable(enabled = isServerStopped) {
+                                .clickable(enabled = isServerStopped && !serverState.isDownloading) {
                                     onEngineChange(engine)
                                 }
                                 .padding(vertical = 10.dp, horizontal = 4.dp),
@@ -484,7 +485,7 @@ fun DashboardScreen(
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(ObsidianDark)
                                 .border(1.dp, CardBorder, RoundedCornerShape(8.dp))
-                                .clickable(enabled = isServerStopped) {
+                                .clickable(enabled = isServerStopped && !serverState.isDownloading) {
                                     versionDropdownExpanded = true
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -574,44 +575,93 @@ fun DashboardScreen(
                         )
                     }
                 } else {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(WarningYellow.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .background(
+                                if (serverState.isDownloading) MintAccent.copy(alpha = 0.12f)
+                                else WarningYellow.copy(alpha = 0.12f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Wersja niepobrana: ${serverState.selectedEngine.displayName} ${serverState.selectedVersion}",
-                                color = WarningYellow,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 12.sp
-                            )
-                            Text(
-                                text = "Pobierze się automatycznie przy starcie serwera.",
-                                color = TextSecondary,
-                                fontSize = 11.sp
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (serverState.isDownloading) {
+                                        "Pobieranie ${serverState.selectedEngine.displayName} ${serverState.selectedVersion}: ${serverState.downloadProgressPercent}%"
+                                    } else {
+                                        "Wersja niepobrana: ${serverState.selectedEngine.displayName} ${serverState.selectedVersion}"
+                                    },
+                                    color = if (serverState.isDownloading) MintAccent else WarningYellow,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    text = if (serverState.isDownloading) {
+                                        serverState.downloadStatusMessage ?: "Pobieranie pliku serwera..."
+                                    } else {
+                                        "Pobierze się automatycznie przy starcie serwera."
+                                    },
+                                    color = TextSecondary,
+                                    fontSize = 11.sp
+                                )
+                            }
+
+                            if (isServerStopped) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        if (!serverState.isDownloading) {
+                                            onDownloadVersion(serverState.selectedVersion)
+                                        }
+                                    },
+                                    enabled = !serverState.isDownloading,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MintAccent,
+                                        disabledContentColor = MintAccent.copy(alpha = 0.7f)
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (serverState.isDownloading) MintAccent.copy(alpha = 0.5f) else MintAccent
+                                    )
+                                ) {
+                                    if (serverState.isDownloading) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MintAccent
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("${serverState.downloadProgressPercent}%", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Download,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Pobierz", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
 
-                        if (isServerStopped) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            OutlinedButton(
-                                onClick = { onDownloadVersion(serverState.selectedVersion) },
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MintAccent),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MintAccent)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Download,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Pobierz", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
+                        if (serverState.isDownloading) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(
+                                progress = { (serverState.downloadProgressPercent / 100f).coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = MintAccent,
+                                trackColor = ObsidianDark
+                            )
                         }
                     }
                 }
@@ -763,8 +813,13 @@ fun DashboardScreen(
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
+                val engineThreadDesc = when (serverState.selectedEngine) {
+                    ServerEngine.FOLIA -> "Silnik Folia przydziela dedykowane wątki do równoległego tickingowania każdego regionu świata na wybranych rdzeniach."
+                    ServerEngine.PURPUR -> "Silnik Purpur optymalizuje przetwarzanie chunków, encji i asynchroniczny zapis na wybranych rdzeniach."
+                    ServerEngine.FABRIC -> "Silnik Fabric wykorzystuje zoptymalizowany podział zadań na dedykowanych rdzeniach procesora."
+                }
                 Text(
-                    text = "Silnik Folia przydziela dedykowane wątki do równoległego tickingowania każdego regionu świata na wybranych rdzeniach.",
+                    text = engineThreadDesc,
                     color = TextSecondary,
                     fontSize = 11.sp
                 )
@@ -1230,7 +1285,7 @@ fun DashboardScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "RAM Serwera (Folia)",
+                            text = "RAM Serwera (${serverState.selectedEngine.displayName})",
                             color = TextPrimary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
@@ -1286,7 +1341,7 @@ fun DashboardScreen(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "CPU Serwera Folia",
+                            text = "CPU Serwera (${serverState.selectedEngine.displayName})",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )

@@ -6,7 +6,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 class PluginManager(
-    private val configManager: ConfigManager,
+    val configManager: ConfigManager,
     private val modrinthApiService: ModrinthApiService = ModrinthApiService()
 ) {
 
@@ -51,7 +51,33 @@ class PluginManager(
     fun deletePlugin(plugin: InstalledPlugin): Boolean {
         val dir = configManager.pluginsDir
         val file = File(dir, plugin.filename)
-        return file.exists() && file.delete()
+        val deleted = file.exists() && file.delete()
+        if (deleted) {
+            configManager.unmarkPluginInstalled(plugin.filename)
+            configManager.unmarkPluginInstalled(plugin.name)
+        }
+        return deleted
+    }
+
+    fun isPluginInstalled(hit: ModrinthProjectHit, installedList: List<InstalledPlugin>): Boolean {
+        // 1. Sprawdzenie po zapisanych identyfikatorach w ConfigManager
+        val hitSlug = hit.slug
+        if (configManager.isPluginMarkedInstalled(hit.projectId) ||
+            (!hitSlug.isNullOrBlank() && configManager.isPluginMarkedInstalled(hitSlug)) ||
+            configManager.isPluginMarkedInstalled(hit.title)
+        ) {
+            return true
+        }
+
+        // 2. Porównanie z plikami faktycznie obecnymi w folderze plugins/
+        val slugClean = hitSlug?.lowercase()?.replace("-", "")?.replace("_", "") ?: ""
+        val titleClean = hit.title.lowercase().replace(" ", "").replace("-", "").replace("_", "")
+
+        return installedList.any { plugin ->
+            val pluginClean = plugin.name.lowercase().replace(" ", "").replace("-", "").replace("_", "")
+            (slugClean.isNotEmpty() && (pluginClean.contains(slugClean) || slugClean.contains(pluginClean))) ||
+            pluginClean.contains(titleClean) || titleClean.contains(pluginClean)
+        }
     }
 
     suspend fun installPluginFromModrinth(
@@ -75,6 +101,8 @@ class PluginManager(
         }
 
         if (success) {
+            configManager.markPluginInstalled(projectIdOrSlug)
+            configManager.markPluginInstalled(versionFile.filename)
             onProgress(100, "Zainstalowano pomyślnie!")
             true
         } else {

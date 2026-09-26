@@ -239,6 +239,46 @@ class ConfigManager(private val context: Context) {
         file.writeText(content)
     }
 
+    fun getLastPluginSearchQuery(): String {
+        return prefs.getString("last_plugin_search_query", "WorldReset") ?: "WorldReset"
+    }
+
+    fun setLastPluginSearchQuery(query: String) {
+        prefs.edit().putString("last_plugin_search_query", query).apply()
+    }
+
+    fun getInstalledPluginIdentifiers(): Set<String> {
+        return prefs.getStringSet("installed_plugins_tracker", emptySet()) ?: emptySet()
+    }
+
+    fun markPluginInstalled(identifier: String) {
+        if (identifier.isBlank()) return
+        val current = getInstalledPluginIdentifiers().toMutableSet()
+        current.add(identifier.lowercase().trim())
+        val cleanName = identifier.substringBeforeLast(".").lowercase().trim()
+        current.add(cleanName)
+        prefs.edit().putStringSet("installed_plugins_tracker", current).apply()
+    }
+
+    fun unmarkPluginInstalled(identifier: String) {
+        if (identifier.isBlank()) return
+        val current = getInstalledPluginIdentifiers().toMutableSet()
+        val cleanName = identifier.lowercase().trim()
+        val withoutExt = identifier.substringBeforeLast(".").lowercase().trim()
+        current.remove(cleanName)
+        current.remove(withoutExt)
+        prefs.edit().putStringSet("installed_plugins_tracker", current).apply()
+    }
+
+    fun isPluginMarkedInstalled(identifier: String): Boolean {
+        if (identifier.isBlank()) return false
+        val clean = identifier.lowercase().trim()
+        val all = getInstalledPluginIdentifiers()
+        return all.contains(clean) || all.any {
+            it.isNotBlank() && (clean.contains(it) || it.contains(clean))
+        }
+    }
+
     private fun defaultProperties(): Map<String, String> {
         return mapOf(
             "server-port" to "25565",

@@ -57,6 +57,9 @@ data class ServerState(
     val serverPort: Int = 25565,
     val relayConnected: Boolean = false,
     val errorMessage: String? = null,
+    val isDownloading: Boolean = false,
+    val downloadProgressPercent: Int = 0,
+    val downloadStatusMessage: String? = null,
     val motd: String = "§aMinecraft Mobile Server §7(Xiaomi 11T Pro)",
     val hasCustomIcon: Boolean = false
 ) {

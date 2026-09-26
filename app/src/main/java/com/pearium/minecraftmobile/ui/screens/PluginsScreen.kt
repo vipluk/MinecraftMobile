@@ -17,7 +17,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -30,6 +33,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
@@ -54,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pearium.minecraftmobile.modrinth.InstalledPlugin
@@ -80,7 +85,7 @@ fun PluginsScreen(
     val scope = rememberCoroutineScope()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    var searchQuery by remember { mutableStateOf("EssentialsX") }
+    var searchQuery by remember { mutableStateOf(pluginManager.configManager.getLastPluginSearchQuery()) }
     var isSearching by remember { mutableStateOf(false) }
 
     val searchResults = remember { mutableStateListOf<ModrinthProjectHit>() }
@@ -91,14 +96,23 @@ fun PluginsScreen(
         installedPlugins.addAll(pluginManager.getInstalledPlugins())
     }
 
+    val performSearch: () -> Unit = {
+        if (searchQuery.isNotBlank()) {
+            pluginManager.configManager.setLastPluginSearchQuery(searchQuery.trim())
+        }
+        scope.launch {
+            isSearching = true
+            val hits = modrinthService.searchPlugins(searchQuery.trim())
+            searchResults.clear()
+            searchResults.addAll(hits)
+            isSearching = false
+        }
+    }
+
     LaunchedEffect(Unit) {
         refreshInstalled()
-        // Domyślne wyszukanie popularnych pluginów
-        isSearching = true
-        val results = modrinthService.searchPlugins("Essentials")
-        searchResults.clear()
-        searchResults.addAll(results)
-        isSearching = false
+        // Wyszukanie ostatnio wybranego lub domyślnego ("WorldReset") pluginu
+        performSearch()
     }
 
     Column(
@@ -161,9 +175,11 @@ fun PluginsScreen(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Szukaj pluginów (np. LuckPerms, WorldEdit)...", color = TextSecondary, fontSize = 13.sp) },
+                    placeholder = { Text("Szukaj pluginów (np. WorldReset, LuckPerms)...", color = TextSecondary, fontSize = 13.sp) },
                     singleLine = true,
                     leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = TextSecondary) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { performSearch() }),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = EmeraldGreen,
                         unfocusedBorderColor = CardBorder,
@@ -176,15 +192,7 @@ fun PluginsScreen(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Button(
-                    onClick = {
-                        scope.launch {
-                            isSearching = true
-                            val hits = modrinthService.searchPlugins(searchQuery)
-                            searchResults.clear()
-                            searchResults.addAll(hits)
-                            isSearching = false
-                        }
-                    },
+                    onClick = { performSearch() },
                     modifier = Modifier.height(54.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen)
@@ -210,6 +218,7 @@ fun PluginsScreen(
                 ) {
                     items(searchResults) { hit ->
                         var isDownloading by remember { mutableStateOf(false) }
+                        val isInstalled = pluginManager.isPluginInstalled(hit, installedPlugins)
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -237,30 +246,55 @@ fun PluginsScreen(
                                         )
                                     }
 
-                                    Button(
-                                        onClick = {
-                                            isDownloading = true
-                                            scope.launch {
-                                                val success = pluginManager.installPluginFromModrinth(hit.projectId) { _, msg -> }
-                                                isDownloading = false
-                                                if (success) {
-                                                    Toast.makeText(context, "Zainstalowano: ${hit.title}!", Toast.LENGTH_SHORT).show()
-                                                    refreshInstalled()
-                                                } else {
-                                                    Toast.makeText(context, "Błąd instalacji ${hit.title}", Toast.LENGTH_SHORT).show()
+                                    if (isInstalled) {
+                                        OutlinedButton(
+                                            onClick = {},
+                                            enabled = false,
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldGreen.copy(alpha = 0.5f)),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                disabledContainerColor = DarkEmerald.copy(alpha = 0.35f),
+                                                disabledContentColor = MintAccent
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MintAccent,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Zainstalowany", color = MintAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                isDownloading = true
+                                                scope.launch {
+                                                    val success = pluginManager.installPluginFromModrinth(hit.projectId) { _, msg -> }
+                                                    isDownloading = false
+                                                    if (success) {
+                                                        pluginManager.configManager.markPluginInstalled(hit.projectId)
+                                                        hit.slug?.let { pluginManager.configManager.markPluginInstalled(it) }
+                                                        pluginManager.configManager.markPluginInstalled(hit.title)
+                                                        refreshInstalled()
+                                                        Toast.makeText(context, "Zainstalowano: ${hit.title}!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "Błąd instalacji ${hit.title}", Toast.LENGTH_SHORT).show()
+                                                    }
                                                 }
+                                            },
+                                            enabled = !isDownloading,
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = DarkEmerald)
+                                        ) {
+                                            if (isDownloading) {
+                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MintAccent, strokeWidth = 2.dp)
+                                            } else {
+                                                Icon(imageVector = Icons.Default.CloudDownload, contentDescription = null, tint = MintAccent, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Instaluj", color = MintAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                             }
-                                        },
-                                        enabled = !isDownloading,
-                                        shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = DarkEmerald)
-                                    ) {
-                                        if (isDownloading) {
-                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MintAccent, strokeWidth = 2.dp)
-                                        } else {
-                                            Icon(imageVector = Icons.Default.CloudDownload, contentDescription = null, tint = MintAccent, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Instaluj", color = MintAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
