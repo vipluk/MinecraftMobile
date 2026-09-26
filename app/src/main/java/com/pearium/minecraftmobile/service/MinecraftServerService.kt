@@ -74,8 +74,9 @@ class MinecraftServerService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val ram = intent.getFloatExtra(EXTRA_RAM, 4.0f)
+                val cores = intent.getIntExtra(EXTRA_CORES, processManager.serverState.value.allocatedCores)
                 startForeground(NOTIFICATION_ID, buildNotification("Uruchamianie...", 0, ram))
-                processManager.startServer(ram)
+                processManager.startServer(ram, cores)
             }
             ACTION_STOP -> {
                 processManager.stopServer()
@@ -180,6 +181,7 @@ class MinecraftServerService : Service() {
         const val ACTION_START = "com.pearium.minecraftmobile.START"
         const val ACTION_STOP = "com.pearium.minecraftmobile.STOP"
         const val EXTRA_RAM = "extra_ram"
+        const val EXTRA_CORES = "extra_cores"
 
         var instance: MinecraftServerService? = null
             private set

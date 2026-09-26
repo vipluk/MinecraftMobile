@@ -41,12 +41,91 @@ class ServerProcessManager(
 
     private val recentLogs = mutableListOf<String>()
 
+    init {
+        val savedRam = configManager.getAllocatedRam()
+        val savedCores = configManager.getAllocatedCores()
+        val savedVersion = configManager.getSelectedFoliaVersion()
+        val installedVer = foliaDownloader.getInstalledVersion()
+
+        _serverState.update {
+            it.copy(
+                allocatedRamGb = savedRam,
+                allocatedCores = savedCores,
+                selectedFoliaVersion = savedVersion,
+                installedFoliaVersion = installedVer
+            )
+        }
+
+        // Pobierz najnowsze dostępne wersje Folia z API
+        scope.launch {
+            val versions = foliaDownloader.fetchAvailableVersions()
+            _serverState.update { it.copy(availableFoliaVersions = versions) }
+        }
+
+        // Ciągły monitor zasobów sprzętowych telefonu
+        startStatsLoop()
+    }
+
     fun setRamAllocation(ramGb: Float) {
         val clamped = ramGb.coerceIn(1.0f, 8.0f)
+        configManager.setAllocatedRam(clamped)
         _serverState.update { it.copy(allocatedRamGb = clamped) }
     }
 
-    fun startServer(ramGb: Float = _serverState.value.allocatedRamGb) {
+    fun setCoreAllocation(cores: Int) {
+        val maxAvailable = _serverState.value.totalCores
+        val clamped = cores.coerceIn(1, maxAvailable)
+        configManager.setAllocatedCores(clamped)
+        _serverState.update { it.copy(allocatedCores = clamped) }
+    }
+
+    fun setSelectedFoliaVersion(version: String) {
+        configManager.setSelectedFoliaVersion(version)
+        _serverState.update { it.copy(selectedFoliaVersion = version) }
+    }
+
+    fun downloadSelectedFoliaVersion(version: String = _serverState.value.selectedFoliaVersion, onComplete: (Boolean) -> Unit = {}) {
+        if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
+            return
+        }
+        scope.launch {
+            appendLog("=== POBIERANIE WYBRANEJ WERSJI FOLIA: $version ===")
+            _serverState.update { it.copy(errorMessage = "Pobieranie informacji o Folia $version...") }
+            val downloadInfo = foliaDownloader.fetchLatestDownloadInfo(version)
+            if (downloadInfo == null) {
+                appendLog("[BŁĄD] Nie znaleziono informacji o wersji $version.")
+                _serverState.update { it.copy(errorMessage = "Błąd pobierania informacji o wersji $version.") }
+                onComplete(false)
+                return@launch
+            }
+            val (buildName, downloadUrl) = downloadInfo
+            appendLog("[PaperMC] Pobieranie: $buildName")
+            val ok = foliaDownloader.downloadFolia(version, downloadUrl) { percent, msg ->
+                _serverState.update { it.copy(errorMessage = msg) }
+                if (percent % 25 == 0 || percent == 100) {
+                    appendLog("[Pobieranie] $msg")
+                }
+            }
+            if (ok) {
+                _serverState.update {
+                    it.copy(
+                        installedFoliaVersion = version,
+                        selectedFoliaVersion = version,
+                        errorMessage = null
+                    )
+                }
+                appendLog("[PaperMC] Wersja Folia $version zainstalowana pomyślnie!")
+                onComplete(true)
+            } else {
+                onComplete(false)
+            }
+        }
+    }
+
+    fun startServer(
+        ramGb: Float = _serverState.value.allocatedRamGb,
+        cores: Int = _serverState.value.allocatedCores
+    ) {
         if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
             return
         }
@@ -58,6 +137,7 @@ class ServerProcessManager(
             it.copy(
                 status = ServerStatus.STARTING,
                 allocatedRamGb = ramGb,
+                allocatedCores = cores,
                 errorMessage = null,
                 uptimeSeconds = 0,
                 playersOnline = 0
@@ -92,22 +172,25 @@ class ServerProcessManager(
                 appendLog("[Java] Środowisko OpenJDK 25 zainstalowane pomyślnie!")
             }
 
-            // 2. Sprawdź czy silnik Folia 26.2 jest pobrany
+            // 2. Sprawdź czy wybrana wersja Folia jest pobrana
+            val targetVersion = _serverState.value.selectedFoliaVersion
+            val installedVersion = foliaDownloader.getInstalledVersion()
             val foliaJar = foliaDownloader.getFoliaJar()
-            if (!foliaJar.exists()) {
-                appendLog("=== POBIERANIE SILNIKA FOLIA (Wersja 26.2 Eksperymentalna) ===")
+
+            if (!foliaJar.exists() || installedVersion != targetVersion) {
+                appendLog("=== POBIERANIE SILNIKA FOLIA (Wersja $targetVersion) ===")
                 appendLog("[EULA] Automatycznie zatwierdzono eula.txt (eula=true).")
                 configManager.ensureEulaAccepted()
 
-                appendLog("[PaperMC] Pobieranie informacji o Folia 26.2 z PaperMC Fill v3 API...")
-                _serverState.update { it.copy(errorMessage = "Pobieranie silnika Folia 26.2...") }
+                appendLog("[PaperMC] Pobieranie informacji o Folia $targetVersion z PaperMC Fill v3 API...")
+                _serverState.update { it.copy(errorMessage = "Pobieranie silnika Folia $targetVersion...") }
 
-                val downloadInfo = foliaDownloader.fetchLatestDownloadInfo("26.2")
-                val buildName = downloadInfo?.first ?: "Folia 26.2 (Eksperymentalna)"
+                val downloadInfo = foliaDownloader.fetchLatestDownloadInfo(targetVersion)
+                val buildName = downloadInfo?.first ?: "Folia $targetVersion"
                 val downloadUrl = downloadInfo?.second ?: "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
 
                 appendLog("[PaperMC] Wybrany build: $buildName")
-                val success = foliaDownloader.downloadFolia(downloadUrl) { percent, msg ->
+                val success = foliaDownloader.downloadFolia(targetVersion, downloadUrl) { percent, msg ->
                     _serverState.update { it.copy(errorMessage = msg) }
                     if (percent % 25 == 0 || percent == 100) {
                         appendLog("[Pobieranie] $msg")
@@ -125,16 +208,17 @@ class ServerProcessManager(
                     return@launch
                 }
 
-                appendLog("[PaperMC] Silnik Folia 26.2 pobrany pomyślnie (${foliaJar.length() / (1024 * 1024)} MB)!")
+                _serverState.update { it.copy(installedFoliaVersion = targetVersion) }
+                appendLog("[PaperMC] Silnik Folia $targetVersion pobrany pomyślnie (${foliaJar.length() / (1024 * 1024)} MB)!")
                 configManager.ensureEulaAccepted()
             }
 
             _serverState.update { it.copy(errorMessage = null) }
-            launchServerProcess(ramGb, foliaJar)
+            launchServerProcess(ramGb, cores, foliaJar)
         }
     }
 
-    private suspend fun launchServerProcess(ramGb: Float, foliaJar: java.io.File) {
+    private suspend fun launchServerProcess(ramGb: Float, cores: Int, foliaJar: java.io.File) {
         try {
             val javaExe = javaRuntimeManager.findJavaExecutable()
             if (javaExe == null || !javaExe.exists()) {
@@ -156,6 +240,10 @@ class ServerProcessManager(
                 javaPath,
                 "-Xms512M",
                 "-Xmx${ramInt}G",
+                "-XX:ActiveProcessorCount=$cores",
+                "-Dpaper.worker-threads=$cores",
+                "-Dfolia.region-threads=${maxOf(1, cores - 1)}",
+                "-Dfolia.threads=$cores",
                 "-Djava.io.tmpdir=${tempDir.absolutePath}",
                 "-Dterminal.jline=false",
                 "-Dterminal.ansi=true",
@@ -190,10 +278,7 @@ class ServerProcessManager(
             process = proc
             processWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
 
-            appendLog("=== URUCHAMIANIE SERWERA FOLIA (RAM: ${ramInt}GB) ===")
-
-            // Uruchom pętlę statystyk i czasu działania
-            startStatsLoop()
+            appendLog("=== URUCHAMIANIE SERWERA FOLIA (RAM: ${ramInt}GB, Rdzenie: $cores) ===")
 
             // Czytanie wyjścia serwera
             val reader = BufferedReader(InputStreamReader(proc.inputStream))
@@ -217,7 +302,6 @@ class ServerProcessManager(
 
             val exitCode = proc.waitFor()
             appendLog("=== SERWER ZAKOŃCZYŁ DZIAŁANIE (Kod: $exitCode) ===")
-            stopStatsLoop()
 
             if (exitCode != 0) {
                 val errorSnippet = recentLogs
@@ -234,21 +318,32 @@ class ServerProcessManager(
                             "Serwer wyłączył się z kodem $exitCode. Wejdź w zakładkę Konsola, aby zobaczyć szczegóły!"
                         },
                         uptimeSeconds = 0,
-                        playersOnline = 0
+                        playersOnline = 0,
+                        usedMemoryMb = 0,
+                        serverCpuUsagePercent = 0f
                     )
                 }
             } else {
-                _serverState.update { it.copy(status = ServerStatus.STOPPED, uptimeSeconds = 0, playersOnline = 0) }
+                _serverState.update {
+                    it.copy(
+                        status = ServerStatus.STOPPED,
+                        uptimeSeconds = 0,
+                        playersOnline = 0,
+                        usedMemoryMb = 0,
+                        serverCpuUsagePercent = 0f
+                    )
+                }
             }
 
         } catch (e: Exception) {
             e.printStackTrace()
             appendLog("[BŁĄD] Nie udało się wystartować procesu: ${e.localizedMessage}")
-            stopStatsLoop()
             _serverState.update {
                 it.copy(
                     status = ServerStatus.ERROR,
-                    errorMessage = e.localizedMessage
+                    errorMessage = e.localizedMessage,
+                    usedMemoryMb = 0,
+                    serverCpuUsagePercent = 0f
                 )
             }
         } finally {
@@ -269,7 +364,6 @@ class ServerProcessManager(
             sendCommand("stop")
             val currentProcess = process
             if (currentProcess != null) {
-                // Poczekaj do 15 sekund na eleganckie zapisanie chunków i zamknięcie
                 val finished = withContext(Dispatchers.IO) {
                     try {
                         currentProcess.waitFor(15, TimeUnit.SECONDS)
@@ -282,8 +376,15 @@ class ServerProcessManager(
                     currentProcess.destroyForcibly()
                 }
             }
-            _serverState.update { it.copy(status = ServerStatus.STOPPED, uptimeSeconds = 0, playersOnline = 0) }
-            stopStatsLoop()
+            _serverState.update {
+                it.copy(
+                    status = ServerStatus.STOPPED,
+                    uptimeSeconds = 0,
+                    playersOnline = 0,
+                    usedMemoryMb = 0,
+                    serverCpuUsagePercent = 0f
+                )
+            }
         }
     }
 
@@ -320,20 +421,151 @@ class ServerProcessManager(
         }
     }
 
-    private fun startStatsLoop() {
-        stopStatsLoop()
-        statsJob = scope.launch {
-            var seconds = 0L
-            while (isActive) {
-                delay(1000)
-                seconds++
-                _serverState.update { it.copy(uptimeSeconds = seconds) }
+    private fun getProcessPid(proc: Process): Int? {
+        return try {
+            val field = proc.javaClass.getDeclaredField("pid")
+            field.isAccessible = true
+            field.getInt(proc)
+        } catch (e: Exception) {
+            try {
+                val method = proc.javaClass.getMethod("pid")
+                (method.invoke(proc) as Long).toInt()
+            } catch (e2: Exception) {
+                null
             }
         }
     }
 
-    private fun stopStatsLoop() {
+    private fun startStatsLoop() {
         statsJob?.cancel()
-        statsJob = null
+        statsJob = scope.launch {
+            var prevTotalTicks: Long = 0
+            var prevIdleTicks: Long = 0
+            var prevProcTicks: Long = 0
+            val prevCores = mutableMapOf<String, Pair<Long, Long>>()
+
+            val actMan = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            val memInfo = android.app.ActivityManager.MemoryInfo()
+            var uptime = 0L
+
+            while (isActive) {
+                delay(1000)
+                if (_serverState.value.status == ServerStatus.RUNNING) {
+                    uptime++
+                } else if (_serverState.value.status == ServerStatus.STOPPED) {
+                    uptime = 0
+                }
+
+                // 1. Pamięć RAM telefonu
+                var totalDevMb = 0L
+                var usedDevMb = 0L
+                if (actMan != null) {
+                    actMan.getMemoryInfo(memInfo)
+                    totalDevMb = memInfo.totalMem / (1024 * 1024)
+                    usedDevMb = (memInfo.totalMem - memInfo.availMem) / (1024 * 1024)
+                }
+
+                // 2. Pamięć RAM procesu serwera (RSS)
+                var serverUsedMb = 0L
+                val currentProc = process
+                val pid = currentProc?.let { getProcessPid(it) }
+                if (pid != null) {
+                    try {
+                        val statmFile = java.io.File("/proc/$pid/statm")
+                        if (statmFile.exists()) {
+                            val parts = statmFile.readText().trim().split("\\s+".toRegex())
+                            if (parts.size >= 2) {
+                                val rssPages = parts[1].toLongOrNull() ?: 0L
+                                serverUsedMb = (rssPages * 4096) / (1024 * 1024)
+                            }
+                        }
+                    } catch (ignored: Exception) {}
+                }
+
+                // 3. Obciążenie CPU telefonu i rdzeni z /proc/stat
+                var devCpuPercent = 0f
+                val coreList = mutableListOf<Float>()
+                var serverCpuPercent = 0f
+
+                try {
+                    val statFile = java.io.File("/proc/stat")
+                    if (statFile.exists()) {
+                        val lines = statFile.readLines()
+                        for (line in lines) {
+                            if (line.startsWith("cpu ")) {
+                                val tokens = line.substring(4).trim().split("\\s+".toRegex()).mapNotNull { it.toLongOrNull() }
+                                if (tokens.size >= 4) {
+                                    val total = tokens.sum()
+                                    val idleAll = tokens[3] + (if (tokens.size > 4) tokens[4] else 0L)
+                                    if (prevTotalTicks > 0) {
+                                        val dTotal = total - prevTotalTicks
+                                        val dIdle = idleAll - prevIdleTicks
+                                        if (dTotal > 0) {
+                                            devCpuPercent = ((dTotal - dIdle).toFloat() / dTotal * 100f).coerceIn(0f, 100f)
+                                        }
+                                    }
+                                    prevTotalTicks = total
+                                    prevIdleTicks = idleAll
+                                }
+                            } else if (line.matches(Regex("^cpu\\d+\\s+.*"))) {
+                                val parts = line.split("\\s+".toRegex())
+                                val coreId = parts[0]
+                                val tokens = parts.drop(1).mapNotNull { it.toLongOrNull() }
+                                if (tokens.size >= 4) {
+                                    val total = tokens.sum()
+                                    val idleAll = tokens[3] + (if (tokens.size > 4) tokens[4] else 0L)
+                                    val prev = prevCores[coreId]
+                                    if (prev != null) {
+                                        val dTotal = total - prev.first
+                                        val dIdle = idleAll - prev.second
+                                        val cPercent = if (dTotal > 0) ((dTotal - dIdle).toFloat() / dTotal * 100f).coerceIn(0f, 100f) else 0f
+                                        coreList.add(cPercent)
+                                    } else {
+                                        coreList.add(0f)
+                                    }
+                                    prevCores[coreId] = Pair(total, idleAll)
+                                }
+                            }
+                        }
+                    }
+
+                    // Obciążenie serwera Minecraft z /proc/$pid/stat
+                    if (pid != null && prevTotalTicks > 0) {
+                        val pStatFile = java.io.File("/proc/$pid/stat")
+                        if (pStatFile.exists()) {
+                            val content = pStatFile.readText()
+                            val rParen = content.lastIndexOf(')')
+                            if (rParen != -1 && rParen + 2 < content.length) {
+                                val rest = content.substring(rParen + 2).split(" ")
+                                if (rest.size > 12) {
+                                    val utime = rest[11].toLongOrNull() ?: 0L
+                                    val stime = rest[12].toLongOrNull() ?: 0L
+                                    val pTicks = utime + stime
+                                    if (prevProcTicks > 0) {
+                                        val dProc = pTicks - prevProcTicks
+                                        val numCores = _serverState.value.allocatedCores
+                                        serverCpuPercent = (dProc.toFloat() * 5f).coerceIn(0f, 100f * numCores)
+                                    }
+                                    prevProcTicks = pTicks
+                                }
+                            }
+                        }
+                    }
+                } catch (ignored: Exception) {}
+
+                _serverState.update {
+                    it.copy(
+                        uptimeSeconds = uptime,
+                        deviceTotalMemoryMb = totalDevMb,
+                        deviceUsedMemoryMb = usedDevMb,
+                        usedMemoryMb = if (_serverState.value.status == ServerStatus.RUNNING) serverUsedMb else 0L,
+                        maxMemoryMb = (it.allocatedRamGb * 1024).toLong(),
+                        deviceCpuUsagePercent = devCpuPercent,
+                        serverCpuUsagePercent = if (_serverState.value.status == ServerStatus.RUNNING) serverCpuPercent else 0f,
+                        coreUsageList = if (coreList.isNotEmpty()) coreList else it.coreUsageList
+                    )
+                }
+            }
+        }
     }
 }

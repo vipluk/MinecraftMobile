@@ -126,11 +126,12 @@ class MainActivity : ComponentActivity() {
                 MainContent(
                     serverState = serverState,
                     logs = consoleLogs,
-                    onStartServer = { ram ->
+                    onStartServer = { ram, cores ->
                         checkAndRequestAllPermissions()
                         val intent = Intent(this, MinecraftServerService::class.java).apply {
                             action = MinecraftServerService.ACTION_START
                             putExtra(MinecraftServerService.EXTRA_RAM, ram)
+                            putExtra(MinecraftServerService.EXTRA_CORES, cores)
                         }
                         startService(intent)
                     },
@@ -142,6 +143,15 @@ class MainActivity : ComponentActivity() {
                     },
                     onRamChange = { ram ->
                         serverService?.processManager?.setRamAllocation(ram)
+                    },
+                    onCoresChange = { cores ->
+                        serverService?.processManager?.setCoreAllocation(cores)
+                    },
+                    onVersionChange = { version ->
+                        serverService?.processManager?.setSelectedFoliaVersion(version)
+                    },
+                    onDownloadVersion = { version ->
+                        serverService?.processManager?.downloadSelectedFoliaVersion(version)
                     },
                     onSendCommand = { cmd ->
                         serverService?.processManager?.sendCommand(cmd)
@@ -211,9 +221,12 @@ class MainActivity : ComponentActivity() {
 fun MainContent(
     serverState: ServerState,
     logs: List<String>,
-    onStartServer: (Float) -> Unit,
+    onStartServer: (Float, Int) -> Unit,
     onStopServer: () -> Unit,
     onRamChange: (Float) -> Unit,
+    onCoresChange: (Int) -> Unit,
+    onVersionChange: (String) -> Unit,
+    onDownloadVersion: (String) -> Unit,
     onSendCommand: (String) -> Unit,
     configManager: ConfigManager,
     pluginManager: PluginManager,
@@ -266,6 +279,9 @@ fun MainContent(
                     onStartServer = onStartServer,
                     onStopServer = onStopServer,
                     onRamChange = onRamChange,
+                    onCoresChange = onCoresChange,
+                    onVersionChange = onVersionChange,
+                    onDownloadVersion = onDownloadVersion,
                     onNavigateToConsole = { selectedScreenIndex = 1 }
                 )
                 1 -> ConsoleScreen(

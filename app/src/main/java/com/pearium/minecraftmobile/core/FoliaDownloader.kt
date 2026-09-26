@@ -24,9 +24,55 @@ class FoliaDownloader(private val context: Context) {
         return File(File(context.filesDir, "minecraft_server"), "folia.jar")
     }
 
+    fun getInstalledVersion(): String? {
+        val file = File(File(context.filesDir, "minecraft_server"), "folia_version.txt")
+        if (file.exists() && getFoliaJar().exists()) {
+            val v = file.readText().trim()
+            if (v.isNotEmpty()) return v
+        }
+        return if (getFoliaJar().exists()) "26.2" else null
+    }
+
+    fun setInstalledVersion(version: String) {
+        val file = File(File(context.filesDir, "minecraft_server"), "folia_version.txt")
+        file.parentFile?.mkdirs()
+        file.writeText(version)
+    }
+
     fun isFoliaInstalled(): Boolean {
         val jar = getFoliaJar()
         return jar.exists() && jar.length() > 10 * 1024 * 1024 // min 10 MB
+    }
+
+    suspend fun fetchAvailableVersions(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://fill.papermc.io/v3/projects/folia"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "MinecraftMobile/1.0 (pearium.com)")
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                if (body != null) {
+                    val json = gson.fromJson(body, JsonObject::class.java)
+                    val versionsObj = json.getAsJsonObject("versions")
+                    val list = mutableListOf<String>()
+                    for (entry in versionsObj.entrySet()) {
+                        val arr = entry.value.asJsonArray
+                        for (v in arr) {
+                            list.add(v.asString)
+                        }
+                    }
+                    if (list.isNotEmpty()) {
+                        return@withContext list
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return@withContext listOf("26.2", "26.1.2", "1.21.11", "1.21.4", "1.20.6", "1.20.4", "1.19.4")
     }
 
     suspend fun fetchLatestDownloadInfo(targetVersion: String = "26.2"): Pair<String, String>? = withContext(Dispatchers.IO) {
@@ -67,7 +113,7 @@ class FoliaDownloader(private val context: Context) {
             val serverDefault = downloads.getAsJsonObject("server:default")
             val downloadUrl = serverDefault.get("url").asString
 
-            return@withContext Pair("Folia $targetVersion (build #$maxId - Eksperymentalna)", downloadUrl)
+            return@withContext Pair("Folia $targetVersion (build #$maxId)", downloadUrl)
         } catch (e: Exception) {
             e.printStackTrace()
             return@withContext getFallbackDownloadInfo(targetVersion)
@@ -75,20 +121,14 @@ class FoliaDownloader(private val context: Context) {
     }
 
     private fun getFallbackDownloadInfo(targetVersion: String): Pair<String, String> {
-        return if (targetVersion == "26.2") {
-            Pair(
-                "Folia 26.2 build #7 (Eksperymentalna)",
-                "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
-            )
-        } else {
-            Pair(
-                "Folia 26.2 (Stable)",
-                "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
-            )
-        }
+        return Pair(
+            "Folia $targetVersion",
+            "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
+        )
     }
 
     suspend fun downloadFolia(
+        targetVersion: String,
         downloadUrl: String,
         onProgress: (Int, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
@@ -123,16 +163,18 @@ class FoliaDownloader(private val context: Context) {
                             val percent = ((totalRead * 100) / totalBytes).toInt()
                             val mbRead = totalRead / (1024 * 1024)
                             val mbTotal = totalBytes / (1024 * 1024)
-                            onProgress(percent, "Pobieranie Folia 26.2: $mbRead MB / $mbTotal MB ($percent%)")
+                            onProgress(percent, "Pobieranie Folia $targetVersion: $mbRead MB / $mbTotal MB ($percent%)")
                         }
                     }
                 }
             }
-            onProgress(100, "Silnik Folia 26.2 pobrany pomyślnie!")
+
+            setInstalledVersion(targetVersion)
+            onProgress(100, "Silnik Folia $targetVersion pobrany pomyślnie!")
             true
         } catch (e: Exception) {
             e.printStackTrace()
-            onProgress(-1, "Błąd pobierania: ${e.localizedMessage}")
+            onProgress(-1, "Błąd pobierania Folia: ${e.localizedMessage}")
             false
         }
     }

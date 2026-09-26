@@ -8,6 +8,34 @@ import java.util.Properties
 
 class ConfigManager(private val context: Context) {
 
+    private val prefs = context.getSharedPreferences("minecraft_mobile_prefs", Context.MODE_PRIVATE)
+
+    fun getSelectedFoliaVersion(): String {
+        return prefs.getString("folia_version", "26.2") ?: "26.2"
+    }
+
+    fun setSelectedFoliaVersion(version: String) {
+        prefs.edit().putString("folia_version", version).apply()
+    }
+
+    fun getAllocatedCores(): Int {
+        val maxAvailable = Runtime.getRuntime().availableProcessors()
+        val defaultCores = (maxAvailable / 2).coerceIn(2, 6)
+        return prefs.getInt("allocated_cores", defaultCores)
+    }
+
+    fun setAllocatedCores(cores: Int) {
+        prefs.edit().putInt("allocated_cores", cores).apply()
+    }
+
+    fun getAllocatedRam(): Float {
+        return prefs.getFloat("allocated_ram", 4.0f)
+    }
+
+    fun setAllocatedRam(ram: Float) {
+        prefs.edit().putFloat("allocated_ram", ram).apply()
+    }
+
     val serverDir: File
         get() = File(context.filesDir, "minecraft_server").apply {
             if (!exists()) mkdirs()
