@@ -54,24 +54,54 @@ class ServerProcessManager(
         // Zawsze upewnij się, że EULA jest zaakceptowana (eula=true)
         configManager.ensureEulaAccepted()
 
-        val foliaJar = foliaDownloader.getFoliaJar()
-        if (!foliaJar.exists()) {
-            _serverState.update {
-                it.copy(
-                    status = ServerStatus.STARTING,
-                    allocatedRamGb = ramGb,
-                    errorMessage = "Pobieranie silnika Folia 26.2...",
-                    uptimeSeconds = 0,
-                    playersOnline = 0
-                )
+        _serverState.update {
+            it.copy(
+                status = ServerStatus.STARTING,
+                allocatedRamGb = ramGb,
+                errorMessage = null,
+                uptimeSeconds = 0,
+                playersOnline = 0
+            )
+        }
+
+        scope.launch {
+            // 1. Sprawdź czy środowisko Java 21 jest pobrane
+            if (!javaRuntimeManager.isJavaInstalled()) {
+                appendLog("=== POBIERANIE ŚRODOWISKA JAVA 21 (ARM64) ===")
+                appendLog("[Java] Brak zainstalowanego OpenJDK 21. Rozpoczynanie automatycznego pobierania...")
+                _serverState.update { it.copy(errorMessage = "Pobieranie środowiska Java 21...") }
+
+                val javaSuccess = javaRuntimeManager.installJavaRuntime { percent, msg ->
+                    _serverState.update { it.copy(errorMessage = msg) }
+                    if (percent % 25 == 0 || percent == 100) {
+                        appendLog("[Java] $msg")
+                    }
+                }
+
+                if (!javaSuccess || !javaRuntimeManager.isJavaInstalled()) {
+                    _serverState.update {
+                        it.copy(
+                            status = ServerStatus.ERROR,
+                            errorMessage = "Błąd instalacji środowiska Java 21! Sprawdź połączenie z Internetem."
+                        )
+                    }
+                    appendLog("[BŁĄD] Nie udało się zainstalować środowiska Java 21.")
+                    return@launch
+                }
+
+                appendLog("[Java] Środowisko OpenJDK 21 zainstalowane pomyślnie!")
             }
 
-            scope.launch {
+            // 2. Sprawdź czy silnik Folia 26.2 jest pobrany
+            val foliaJar = foliaDownloader.getFoliaJar()
+            if (!foliaJar.exists()) {
                 appendLog("=== POBIERANIE SILNIKA FOLIA (Wersja 26.2 Eksperymentalna) ===")
                 appendLog("[EULA] Automatycznie zatwierdzono eula.txt (eula=true).")
                 configManager.ensureEulaAccepted()
 
                 appendLog("[PaperMC] Pobieranie informacji o Folia 26.2 z PaperMC Fill v3 API...")
+                _serverState.update { it.copy(errorMessage = "Pobieranie silnika Folia 26.2...") }
+
                 val downloadInfo = foliaDownloader.fetchLatestDownloadInfo("26.2")
                 val buildName = downloadInfo?.first ?: "Folia 26.2 (Eksperymentalna)"
                 val downloadUrl = downloadInfo?.second ?: "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
@@ -97,31 +127,25 @@ class ServerProcessManager(
 
                 appendLog("[PaperMC] Silnik Folia 26.2 pobrany pomyślnie (${foliaJar.length() / (1024 * 1024)} MB)!")
                 configManager.ensureEulaAccepted()
-                _serverState.update { it.copy(errorMessage = null) }
-
-                launchServerProcess(ramGb, foliaJar)
             }
-            return
-        }
 
-        _serverState.update {
-            it.copy(
-                status = ServerStatus.STARTING,
-                allocatedRamGb = ramGb,
-                errorMessage = null,
-                uptimeSeconds = 0,
-                playersOnline = 0
-            )
-        }
-
-        scope.launch {
+            _serverState.update { it.copy(errorMessage = null) }
             launchServerProcess(ramGb, foliaJar)
         }
     }
 
     private suspend fun launchServerProcess(ramGb: Float, foliaJar: java.io.File) {
         try {
-            val javaPath = javaRuntimeManager.getExecutablePath()
+            val javaExe = javaRuntimeManager.findJavaExecutable()
+            if (javaExe == null || !javaExe.exists()) {
+                throw IllegalStateException("Nie znaleziono pliku binarnego Java po instalacji!")
+            }
+            javaRuntimeManager.makeExecutable(javaExe)
+            val javaPath = javaExe.absolutePath
+            val javaHome = javaRuntimeManager.getJavaHomeDir().absolutePath
+            val binDir = javaExe.parentFile?.absolutePath ?: "$javaHome/bin"
+            val libDir = java.io.File(javaHome, "lib").absolutePath
+
             val serverDir = configManager.serverDir
             val ramInt = ramGb.toInt()
 
@@ -160,9 +184,9 @@ class ServerProcessManager(
 
             // Ustaw zmienne środowiskowe dla Android ARM64
             val env = processBuilder.environment()
-            env["JAVA_HOME"] = javaRuntimeManager.jreDir.absolutePath
-            env["PATH"] = "${javaRuntimeManager.jreDir.absolutePath}/bin:" + (env["PATH"] ?: "")
-            env["LD_LIBRARY_PATH"] = "${javaRuntimeManager.jreDir.absolutePath}/lib:" + (env["LD_LIBRARY_PATH"] ?: "")
+            env["JAVA_HOME"] = javaHome
+            env["PATH"] = "$binDir:" + (env["PATH"] ?: "")
+            env["LD_LIBRARY_PATH"] = "$libDir:$libDir/server:" + (env["LD_LIBRARY_PATH"] ?: "")
 
             val proc = processBuilder.start()
             process = proc

@@ -107,11 +107,14 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ -> }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        requestBatteryOptimizationIgnore()
-        requestNotificationPermission()
+        checkAndRequestAllPermissions()
 
         // Uruchomienie i bindowanie serwisu
         val serviceIntent = Intent(this, MinecraftServerService::class.java)
@@ -124,6 +127,7 @@ class MainActivity : ComponentActivity() {
                     serverState = serverState,
                     logs = consoleLogs,
                     onStartServer = { ram ->
+                        checkAndRequestAllPermissions()
                         val intent = Intent(this, MinecraftServerService::class.java).apply {
                             action = MinecraftServerService.ACTION_START
                             putExtra(MinecraftServerService.EXTRA_RAM, ram)
@@ -158,6 +162,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkAndRequestAllPermissions() {
+        requestBatteryOptimizationIgnore()
+        requestNotificationPermission()
+        requestStoragePermissions()
+    }
+
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -169,10 +179,30 @@ class MainActivity : ComponentActivity() {
     private fun requestBatteryOptimizationIgnore() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                try {
+                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    startActivity(intent)
+                } catch (ignored: Exception) {}
             }
-            startActivity(intent)
+        }
+    }
+
+    private fun requestStoragePermissions() {
+        val permissionsToRequest = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        if (permissionsToRequest.isNotEmpty()) {
+            storagePermissionLauncher.launch(permissionsToRequest.toTypedArray())
         }
     }
 }
