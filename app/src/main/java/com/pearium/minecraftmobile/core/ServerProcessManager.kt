@@ -149,30 +149,27 @@ class ServerProcessManager(
             val serverDir = configManager.serverDir
             val ramInt = ramGb.toInt()
 
-            // Zoptymalizowane flagi JVM Aikar dla procesorów ARM64 i silnika Folia
+            val tempDir = java.io.File(context.cacheDir, "tmp").apply { mkdirs() }
+
+            // Zoptymalizowane flagi JVM dla procesorów ARM64 i silnika Folia na Androidzie
             val command = arrayListOf(
                 javaPath,
-                "-Xms${ramInt}G",
+                "-Xms512M",
                 "-Xmx${ramInt}G",
+                "-Djava.io.tmpdir=${tempDir.absolutePath}",
+                "-Dterminal.jline=false",
+                "-Dterminal.ansi=true",
+                "-Dpaper.playerconnection.keepalive=60",
                 "-XX:+UseG1GC",
                 "-XX:+ParallelRefProcEnabled",
                 "-XX:MaxGCPauseMillis=200",
                 "-XX:+UnlockExperimentalVMOptions",
                 "-XX:+DisableExplicitGC",
-                "-XX:+AlwaysPreTouch",
-                "-XX:G1NewSizePercent=30",
+                "-XX:G1NewSizePercent=20",
                 "-XX:G1MaxNewSizePercent=40",
-                "-XX:G1ReservePercent=20",
-                "-XX:G1HeapWastePercent=5",
-                "-XX:G1MixedGCCountTarget=4",
-                "-XX:InitiatingHeapOccupancyPercent=15",
-                "-XX:G1MixedGCLiveThresholdPercent=90",
-                "-XX:G1RSetUpdatingPauseTimePercent=5",
+                "-XX:G1ReservePercent=15",
                 "-XX:SurvivorRatio=32",
-                "-XX:+PerfDisableSharedMem",
-                "-XX:MaxTenuringThreshold=1",
                 "-Dusing.aikars.flags=https://mcflags.emc.gs",
-                "-Daikars.new.flags=true",
                 "-jar",
                 foliaJar.absolutePath,
                 "nogui"
@@ -182,11 +179,12 @@ class ServerProcessManager(
             processBuilder.directory(serverDir)
             processBuilder.redirectErrorStream(true)
 
-            // Ustaw zmienne środowiskowe dla Android ARM64
+            // Ustaw pełne zmienne środowiskowe dla Android ARM64
             val env = processBuilder.environment()
             env["JAVA_HOME"] = javaHome
-            env["PATH"] = "$binDir:" + (env["PATH"] ?: "")
-            env["LD_LIBRARY_PATH"] = "$libDir:$libDir/server:" + (env["LD_LIBRARY_PATH"] ?: "")
+            env["PATH"] = "$binDir:" + (env["PATH"] ?: "/system/bin:/system/xbin")
+            env["LD_LIBRARY_PATH"] = "$libDir:$libDir/server:/system/lib64:/apex/com.android.runtime/lib64:/apex/com.android.art/lib64:/vendor/lib64"
+            env["TMPDIR"] = tempDir.absolutePath
 
             val proc = processBuilder.start()
             process = proc
@@ -220,7 +218,28 @@ class ServerProcessManager(
             val exitCode = proc.waitFor()
             appendLog("=== SERWER ZAKOŃCZYŁ DZIAŁANIE (Kod: $exitCode) ===")
             stopStatsLoop()
-            _serverState.update { it.copy(status = ServerStatus.STOPPED, uptimeSeconds = 0, playersOnline = 0) }
+
+            if (exitCode != 0) {
+                val errorSnippet = recentLogs
+                    .filter { !it.contains("ZAKOŃCZYŁ DZIAŁANIE") && it.isNotBlank() }
+                    .takeLast(3)
+                    .joinToString("\n")
+
+                _serverState.update {
+                    it.copy(
+                        status = ServerStatus.ERROR,
+                        errorMessage = if (errorSnippet.isNotBlank()) {
+                            "Serwer wyłączył się (Kod: $exitCode):\n$errorSnippet"
+                        } else {
+                            "Serwer wyłączył się z kodem $exitCode. Wejdź w zakładkę Konsola, aby zobaczyć szczegóły!"
+                        },
+                        uptimeSeconds = 0,
+                        playersOnline = 0
+                    )
+                }
+            } else {
+                _serverState.update { it.copy(status = ServerStatus.STOPPED, uptimeSeconds = 0, playersOnline = 0) }
+            }
 
         } catch (e: Exception) {
             e.printStackTrace()

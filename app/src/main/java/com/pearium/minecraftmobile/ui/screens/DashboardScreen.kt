@@ -171,11 +171,7 @@ fun DashboardScreen(
                 serverState.errorMessage?.let { errorMsg ->
                     val isInfo = serverState.status == ServerStatus.STARTING || errorMsg.startsWith("Pobieranie")
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = errorMsg,
-                        color = if (isInfo) MintAccent else DangerRed,
-                        fontSize = 13.sp,
-                        fontWeight = if (isInfo) FontWeight.Medium else FontWeight.Normal,
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
@@ -183,7 +179,27 @@ fun DashboardScreen(
                                 RoundedCornerShape(8.dp)
                             )
                             .padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
+                    ) {
+                        Text(
+                            text = errorMsg,
+                            color = if (isInfo) MintAccent else DangerRed,
+                            fontSize = 13.sp,
+                            fontWeight = if (isInfo) FontWeight.Medium else FontWeight.Normal
+                        )
+                        if (!isInfo) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "👉 Kliknij tutaj, aby otworzyć Konsolę i zobaczyć pełne logi",
+                                color = MintAccent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { onNavigateToConsole() }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
