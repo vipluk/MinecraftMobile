@@ -71,6 +71,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pearium.minecraftmobile.core.ServerEngine
 import com.pearium.minecraftmobile.core.ServerState
 import com.pearium.minecraftmobile.core.ServerStatus
 import com.pearium.minecraftmobile.ui.theme.CardBackground
@@ -155,6 +156,7 @@ fun DashboardScreen(
     onStopServer: () -> Unit,
     onRamChange: (Float) -> Unit,
     onCoresChange: (Int) -> Unit,
+    onEngineChange: (ServerEngine) -> Unit = {},
     onVersionChange: (String) -> Unit,
     onDownloadVersion: (String) -> Unit,
     onNavigateToConsole: () -> Unit,
@@ -315,6 +317,7 @@ fun DashboardScreen(
         }
 
         // 2. Karta Wyboru Wersji Folia
+        // 2. Karta Wyboru Silnika i Wersji Serwera
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = CardBackground),
@@ -322,6 +325,9 @@ fun DashboardScreen(
             shape = RoundedCornerShape(16.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                val isServerStopped = serverState.status == ServerStatus.STOPPED || serverState.status == ServerStatus.ERROR
+
+                // Nagłówek sekcji
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -329,23 +335,149 @@ fun DashboardScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Extension,
+                            imageVector = Icons.Default.Dns,
                             contentDescription = null,
                             tint = EmeraldGreen,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Wersja Silnika Folia",
+                            text = "Silnik i Wersja Serwera",
                             color = TextPrimary,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 16.sp
                         )
                     }
 
-                    val isServerStopped = serverState.status == ServerStatus.STOPPED || serverState.status == ServerStatus.ERROR
+                    if (!isServerStopped) {
+                        Text(
+                            text = "Serwer aktywny",
+                            color = WarningYellow,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
 
-                    // Przycisk wyboru wersji z rozwijanym menu
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Zakładki wyboru silnika (Folia / Purpur / Fabric)
+                Text(
+                    text = "Wybierz silnik serwera:",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ServerEngine.entries.forEach { engine ->
+                        val isSelected = engine == serverState.selectedEngine
+                        val engineIcon = when (engine) {
+                            ServerEngine.FOLIA -> Icons.Default.Memory
+                            ServerEngine.PURPUR -> Icons.Default.Speed
+                            ServerEngine.FABRIC -> Icons.Default.Extension
+                        }
+                        val badgeText = when (engine) {
+                            ServerEngine.FOLIA -> "Wielowątkowy"
+                            ServerEngine.PURPUR -> "Paper Fork"
+                            ServerEngine.FABRIC -> "Modyfikacje"
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isSelected) MintAccent.copy(alpha = 0.16f)
+                                    else ObsidianDark
+                                )
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) MintAccent else CardBorder,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable(enabled = isServerStopped) {
+                                    onEngineChange(engine)
+                                }
+                                .padding(vertical = 10.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = engineIcon,
+                                    contentDescription = engine.displayName,
+                                    tint = if (isSelected) MintAccent else TextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = engine.displayName,
+                                    color = if (isSelected) TextPrimary else TextSecondary,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = badgeText,
+                                    color = if (isSelected) EmeraldGreen else TextSecondary.copy(alpha = 0.6f),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Pigułka informacyjna o wybranym silniku
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CardBackground.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .border(1.dp, CardBorder.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = when (serverState.selectedEngine) {
+                            ServerEngine.FOLIA -> "⚡ Folia: Dzieli świat na niezależne wątki regionalne. Maksymalna wydajność wielordzeniowa (Snapdragon 888)."
+                            ServerEngine.PURPUR -> "🚀 Purpur: Zoptymalizowany fork PaperMC z pełnym wsparciem klasycznych pluginów Spigot/Paper."
+                            ServerEngine.FABRIC -> "🧩 Fabric: Ultralekki modułowy silnik z obsługą modów. Pliki .jar modów umieszczaj w folderze mods/."
+                        },
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Rząd wyboru wersji dla wybranego silnika
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Wersja Minecraft:",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "Dla silnika ${serverState.selectedEngine.displayName}",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+
                     Box {
                         Row(
                             modifier = Modifier
@@ -359,7 +491,7 @@ fun DashboardScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "v${serverState.selectedFoliaVersion}",
+                                text = "v${serverState.selectedVersion}",
                                 color = MintAccent,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
@@ -380,9 +512,9 @@ fun DashboardScreen(
                                 .background(CardBackground)
                                 .border(1.dp, CardBorder, RoundedCornerShape(8.dp))
                         ) {
-                            serverState.availableFoliaVersions.forEach { version ->
-                                val isSelected = version == serverState.selectedFoliaVersion
-                                val isInstalled = version == serverState.installedFoliaVersion
+                            serverState.availableVersions.forEach { version ->
+                                val isSelected = version == serverState.selectedVersion
+                                val isThisVersionInstalled = isSelected && serverState.isInstalled
                                 DropdownMenuItem(
                                     text = {
                                         Row(
@@ -391,12 +523,12 @@ fun DashboardScreen(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = "Folia $version" + if (version == "26.2") " (Najnowsza)" else "",
+                                                text = "${serverState.selectedEngine.displayName} $version",
                                                 color = if (isSelected) EmeraldGreen else TextPrimary,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                                 fontSize = 14.sp
                                             )
-                                            if (isInstalled) {
+                                            if (isThisVersionInstalled) {
                                                 Spacer(modifier = Modifier.width(12.dp))
                                                 Text(
                                                     text = "Pobrana",
@@ -417,17 +549,16 @@ fun DashboardScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Informacja o stanie zainstalowania wybranej wersji
-                val isTargetInstalled = serverState.installedFoliaVersion == serverState.selectedFoliaVersion
-                if (isTargetInstalled) {
+                // Informacja o stanie zainstalowania wybranego silnika/wersji
+                if (serverState.isInstalled) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(EmeraldGreen.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
@@ -435,9 +566,9 @@ fun DashboardScreen(
                             tint = EmeraldGreen,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Plik Folia ${serverState.selectedFoliaVersion} jest zainstalowany i gotowy do startu.",
+                            text = "Silnik ${serverState.selectedEngine.displayName} ${serverState.selectedVersion} jest pobrany i gotowy do startu.",
                             color = EmeraldGreen,
                             fontSize = 12.sp
                         )
@@ -453,22 +584,22 @@ fun DashboardScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Wybrano inną wersję: ${serverState.selectedFoliaVersion}",
+                                text = "Wersja niepobrana: ${serverState.selectedEngine.displayName} ${serverState.selectedVersion}",
                                 color = WarningYellow,
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 12.sp
                             )
                             Text(
-                                text = "Pobierze się automatycznie po starcie lub kliknij pobierz.",
+                                text = "Pobierze się automatycznie przy starcie serwera.",
                                 color = TextSecondary,
                                 fontSize = 11.sp
                             )
                         }
 
-                        if (serverState.status == ServerStatus.STOPPED || serverState.status == ServerStatus.ERROR) {
+                        if (isServerStopped) {
                             Spacer(modifier = Modifier.width(8.dp))
                             OutlinedButton(
-                                onClick = { onDownloadVersion(serverState.selectedFoliaVersion) },
+                                onClick = { onDownloadVersion(serverState.selectedVersion) },
                                 shape = RoundedCornerShape(8.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MintAccent),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, MintAccent)
@@ -1362,8 +1493,8 @@ fun DashboardScreen(
                     )
                     StatItem(
                         icon = Icons.Default.Extension,
-                        label = "Wersja silnika",
-                        value = "v${serverState.installedFoliaVersion ?: serverState.selectedFoliaVersion}"
+                        label = "Silnik & Wersja",
+                        value = "${serverState.selectedEngine.displayName} v${serverState.selectedVersion}"
                     )
                     StatItem(
                         icon = Icons.Default.Timer,

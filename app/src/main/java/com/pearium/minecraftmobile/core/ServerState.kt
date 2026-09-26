@@ -8,6 +8,18 @@ enum class ServerStatus {
     ERROR
 }
 
+enum class ServerEngine(val id: String, val displayName: String, val shortDesc: String) {
+    FOLIA("folia", "Folia", "Wielowątkowy silnik regionalny (PaperMC)"),
+    PURPUR("purpur", "Purpur", "Wysokowydajny fork Paper z optymalizacjami"),
+    FABRIC("fabric", "Fabric", "Lekki, modułowy silnik z obsługą modów Fabric");
+
+    companion object {
+        fun fromId(id: String): ServerEngine {
+            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) || it.displayName.equals(id, ignoreCase = true) } ?: FOLIA
+        }
+    }
+}
+
 data class CoreTelemetry(
     val coreIndex: Int,          // 0 do 7
     val coreName: String,        // "Cortex-A55", "Cortex-A78", "Cortex-X1"
@@ -16,7 +28,7 @@ data class CoreTelemetry(
     val maxFreqGhz: Float,       // 1.80f, 2.42f, 2.84f
     val curFreqMhz: Int,         // np. 1804
     val usagePercent: Float,     // 0f do 100f
-    val isAllocated: Boolean     // czy przydzielony serwerowi Folia
+    val isAllocated: Boolean     // czy przydzielony serwerowi
 )
 
 data class ServerState(
@@ -24,9 +36,12 @@ data class ServerState(
     val allocatedRamGb: Float = 4.0f,
     val allocatedCores: Int = 4,
     val totalCores: Int = Runtime.getRuntime().availableProcessors().coerceAtLeast(8),
-    val selectedFoliaVersion: String = "26.2",
-    val installedFoliaVersion: String? = null,
-    val availableFoliaVersions: List<String> = listOf("26.2", "26.1.2", "1.21.11", "1.21.4", "1.20.6", "1.20.4", "1.19.4"),
+    val selectedEngine: ServerEngine = ServerEngine.FOLIA,
+    val availableEngines: List<ServerEngine> = ServerEngine.entries,
+    val selectedVersion: String = "26.2",
+    val installedVersion: String? = null,
+    val isInstalled: Boolean = false,
+    val availableVersions: List<String> = listOf("26.2", "26.1.2", "1.21.11", "1.21.4", "1.20.6", "1.20.4", "1.19.4"),
     val cpuUsagePercent: Float = 0f,
     val serverCpuUsagePercent: Float = 0f,
     val deviceCpuUsagePercent: Float = 0f,
@@ -44,4 +59,9 @@ data class ServerState(
     val errorMessage: String? = null,
     val motd: String = "§aMinecraft Mobile Server §7(Xiaomi 11T Pro)",
     val hasCustomIcon: Boolean = false
-)
+) {
+    // Kompatybilność wsteczna z wcześniejszymi polami Folia
+    val selectedFoliaVersion: String get() = selectedVersion
+    val installedFoliaVersion: String? get() = if (isInstalled) selectedVersion else installedVersion
+    val availableFoliaVersions: List<String> get() = availableVersions
+}

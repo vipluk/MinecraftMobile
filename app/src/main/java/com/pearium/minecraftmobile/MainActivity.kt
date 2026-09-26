@@ -45,6 +45,7 @@ import androidx.core.content.ContextCompat
 import com.pearium.minecraftmobile.core.ConfigManager
 import com.pearium.minecraftmobile.core.FoliaDownloader
 import com.pearium.minecraftmobile.core.JavaRuntimeManager
+import com.pearium.minecraftmobile.core.ServerEngine
 import com.pearium.minecraftmobile.core.ServerProcessManager
 import com.pearium.minecraftmobile.core.ServerState
 import com.pearium.minecraftmobile.modrinth.ModrinthApiService
@@ -147,11 +148,14 @@ class MainActivity : ComponentActivity() {
                     onCoresChange = { cores ->
                         serverService?.processManager?.setCoreAllocation(cores)
                     },
+                    onEngineChange = { engine ->
+                        serverService?.processManager?.setSelectedEngine(engine)
+                    },
                     onVersionChange = { version ->
-                        serverService?.processManager?.setSelectedFoliaVersion(version)
+                        serverService?.processManager?.setSelectedVersion(version)
                     },
                     onDownloadVersion = { version ->
-                        serverService?.processManager?.downloadSelectedFoliaVersion(version)
+                        serverService?.processManager?.downloadSelectedEngineVersion(version = version)
                     },
                     onSendCommand = { cmd ->
                         serverService?.processManager?.sendCommand(cmd)
@@ -234,6 +238,7 @@ fun MainContent(
     onStopServer: () -> Unit,
     onRamChange: (Float) -> Unit,
     onCoresChange: (Int) -> Unit,
+    onEngineChange: (ServerEngine) -> Unit = {},
     onVersionChange: (String) -> Unit,
     onDownloadVersion: (String) -> Unit,
     onSendCommand: (String) -> Unit,
@@ -292,6 +297,7 @@ fun MainContent(
                     onStopServer = onStopServer,
                     onRamChange = onRamChange,
                     onCoresChange = onCoresChange,
+                    onEngineChange = onEngineChange,
                     onVersionChange = onVersionChange,
                     onDownloadVersion = onDownloadVersion,
                     onNavigateToConsole = { selectedScreenIndex = 1 },

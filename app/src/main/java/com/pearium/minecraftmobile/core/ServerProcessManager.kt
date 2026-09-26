@@ -25,7 +25,7 @@ class ServerProcessManager(
     private val context: Context,
     private val configManager: ConfigManager,
     private val javaRuntimeManager: JavaRuntimeManager,
-    private val foliaDownloader: FoliaDownloader
+    private val serverJarDownloader: ServerJarDownloader
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
@@ -44,8 +44,9 @@ class ServerProcessManager(
     init {
         val savedRam = configManager.getAllocatedRam()
         val savedCores = configManager.getAllocatedCores()
-        val savedVersion = configManager.getSelectedFoliaVersion()
-        val installedVer = foliaDownloader.getInstalledVersion()
+        val savedEngine = configManager.getSelectedEngine()
+        val savedVersion = configManager.getSelectedVersion(savedEngine)
+        val isInstalled = serverJarDownloader.isEngineVersionInstalled(savedEngine, savedVersion)
         configManager.ensureDefaultIcon()
         val savedMotd = configManager.getMotd()
         val hasIcon = configManager.getServerIconFile().exists()
@@ -54,17 +55,24 @@ class ServerProcessManager(
             it.copy(
                 allocatedRamGb = savedRam,
                 allocatedCores = savedCores,
-                selectedFoliaVersion = savedVersion,
-                installedFoliaVersion = installedVer,
+                selectedEngine = savedEngine,
+                selectedVersion = savedVersion,
+                isInstalled = isInstalled,
+                installedVersion = if (isInstalled) savedVersion else null,
+                availableVersions = serverJarDownloader.getCachedVersions(savedEngine),
                 motd = savedMotd,
-                hasCustomIcon = configManager.getServerIconFile().exists()
+                hasCustomIcon = hasIcon
             )
         }
 
-        // Pobierz najnowsze dostępne wersje Folia z API
+        // Pobierz najnowsze dostępne wersje dla wybranego silnika z API
         scope.launch {
-            val versions = foliaDownloader.fetchAvailableVersions()
-            _serverState.update { it.copy(availableFoliaVersions = versions) }
+            val versions = serverJarDownloader.fetchAvailableVersions(savedEngine)
+            _serverState.update {
+                if (it.selectedEngine == savedEngine) {
+                    it.copy(availableVersions = versions)
+                } else it
+            }
         }
 
         // Ciągły monitor zasobów sprzętowych telefonu
@@ -103,28 +111,73 @@ class ServerProcessManager(
         _serverState.update { it.copy(allocatedCores = clamped) }
     }
 
-    fun setSelectedFoliaVersion(version: String) {
-        configManager.setSelectedFoliaVersion(version)
-        _serverState.update { it.copy(selectedFoliaVersion = version) }
+    fun setSelectedEngine(engine: ServerEngine) {
+        if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
+            return
+        }
+        configManager.setSelectedEngine(engine)
+        val version = configManager.getSelectedVersion(engine)
+        val isInstalled = serverJarDownloader.isEngineVersionInstalled(engine, version)
+        _serverState.update {
+            it.copy(
+                selectedEngine = engine,
+                selectedVersion = version,
+                isInstalled = isInstalled,
+                installedVersion = if (isInstalled) version else null,
+                availableVersions = serverJarDownloader.getCachedVersions(engine)
+            )
+        }
+        appendLog("[SILNIK] Przełączono na silnik: ${engine.displayName} (${engine.shortDesc})")
+
+        scope.launch {
+            val versions = serverJarDownloader.fetchAvailableVersions(engine)
+            _serverState.update {
+                if (it.selectedEngine == engine) {
+                    it.copy(availableVersions = versions)
+                } else it
+            }
+        }
     }
 
-    fun downloadSelectedFoliaVersion(version: String = _serverState.value.selectedFoliaVersion, onComplete: (Boolean) -> Unit = {}) {
+    fun setSelectedVersion(version: String) {
+        val engine = _serverState.value.selectedEngine
+        configManager.setSelectedVersion(engine, version)
+        val isInstalled = serverJarDownloader.isEngineVersionInstalled(engine, version)
+        _serverState.update {
+            it.copy(
+                selectedVersion = version,
+                isInstalled = isInstalled,
+                installedVersion = if (isInstalled) version else null
+            )
+        }
+        appendLog("[WERSJA] Wybrano wersję ${engine.displayName} $version (zainstalowana: ${if (isInstalled) "TAK" else "NIE"})")
+    }
+
+    fun setSelectedFoliaVersion(version: String) {
+        setSelectedVersion(version)
+    }
+
+    fun downloadSelectedEngineVersion(
+        engine: ServerEngine = _serverState.value.selectedEngine,
+        version: String = _serverState.value.selectedVersion,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
         if (_serverState.value.status != ServerStatus.STOPPED && _serverState.value.status != ServerStatus.ERROR) {
             return
         }
         scope.launch {
-            appendLog("=== POBIERANIE WYBRANEJ WERSJI FOLIA: $version ===")
-            _serverState.update { it.copy(errorMessage = "Pobieranie informacji o Folia $version...") }
-            val downloadInfo = foliaDownloader.fetchLatestDownloadInfo(version)
+            appendLog("=== POBIERANIE SILNIKA: ${engine.displayName} $version ===")
+            _serverState.update { it.copy(errorMessage = "Pobieranie informacji o ${engine.displayName} $version...") }
+            val downloadInfo = serverJarDownloader.fetchLatestDownloadInfo(engine, version)
             if (downloadInfo == null) {
-                appendLog("[BŁĄD] Nie znaleziono informacji o wersji $version.")
-                _serverState.update { it.copy(errorMessage = "Błąd pobierania informacji o wersji $version.") }
+                appendLog("[BŁĄD] Nie znaleziono informacji o pobieraniu dla ${engine.displayName} $version.")
+                _serverState.update { it.copy(errorMessage = "Błąd pobierania informacji o ${engine.displayName} $version.") }
                 onComplete(false)
                 return@launch
             }
             val (buildName, downloadUrl) = downloadInfo
-            appendLog("[PaperMC] Pobieranie: $buildName")
-            val ok = foliaDownloader.downloadFolia(version, downloadUrl) { percent, msg ->
+            appendLog("[${engine.displayName}] Pobieranie: $buildName z $downloadUrl")
+            val ok = serverJarDownloader.downloadServerJar(engine, version, downloadUrl) { percent, msg ->
                 _serverState.update { it.copy(errorMessage = msg) }
                 if (percent % 25 == 0 || percent == 100) {
                     appendLog("[Pobieranie] $msg")
@@ -133,17 +186,23 @@ class ServerProcessManager(
             if (ok) {
                 _serverState.update {
                     it.copy(
-                        installedFoliaVersion = version,
-                        selectedFoliaVersion = version,
+                        isInstalled = true,
+                        installedVersion = version,
+                        selectedVersion = version,
                         errorMessage = null
                     )
                 }
-                appendLog("[PaperMC] Wersja Folia $version zainstalowana pomyślnie!")
+                appendLog("=== SILNIK ${engine.displayName.uppercase()} $version POBRANY POMYŚLNIE ===")
                 onComplete(true)
             } else {
+                appendLog("[BŁĄD] Pobieranie silnika ${engine.displayName} nie powiodło się.")
                 onComplete(false)
             }
         }
+    }
+
+    fun downloadSelectedFoliaVersion(version: String = _serverState.value.selectedVersion, onComplete: (Boolean) -> Unit = {}) {
+        downloadSelectedEngineVersion(_serverState.value.selectedEngine, version, onComplete)
     }
 
     fun startServer(
@@ -196,53 +255,60 @@ class ServerProcessManager(
                 appendLog("[Java] Środowisko OpenJDK 25 zainstalowane pomyślnie!")
             }
 
-            // 2. Sprawdź czy wybrana wersja Folia jest pobrana
-            val targetVersion = _serverState.value.selectedFoliaVersion
-            val installedVersion = foliaDownloader.getInstalledVersion()
-            val foliaJar = foliaDownloader.getFoliaJar()
+            // 2. Sprawdź czy wybrana wersja silnika jest pobrana
+            val engine = _serverState.value.selectedEngine
+            val targetVersion = _serverState.value.selectedVersion
+            val serverJar = serverJarDownloader.getServerJar(engine, targetVersion)
+            val isInstalled = serverJarDownloader.isEngineVersionInstalled(engine, targetVersion)
 
-            if (!foliaJar.exists() || installedVersion != targetVersion) {
-                appendLog("=== POBIERANIE SILNIKA FOLIA (Wersja $targetVersion) ===")
+            if (!serverJar.exists() || !isInstalled) {
+                appendLog("=== POBIERANIE SILNIKA ${engine.displayName.uppercase()} (Wersja $targetVersion) ===")
                 appendLog("[EULA] Automatycznie zatwierdzono eula.txt (eula=true).")
                 configManager.ensureEulaAccepted()
 
-                appendLog("[PaperMC] Pobieranie informacji o Folia $targetVersion z PaperMC Fill v3 API...")
-                _serverState.update { it.copy(errorMessage = "Pobieranie silnika Folia $targetVersion...") }
+                appendLog("[${engine.displayName}] Pobieranie informacji o silniku ${engine.displayName} $targetVersion...")
+                _serverState.update { it.copy(errorMessage = "Pobieranie silnika ${engine.displayName} $targetVersion...") }
 
-                val downloadInfo = foliaDownloader.fetchLatestDownloadInfo(targetVersion)
-                val buildName = downloadInfo?.first ?: "Folia $targetVersion"
-                val downloadUrl = downloadInfo?.second ?: "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
+                val downloadInfo = serverJarDownloader.fetchLatestDownloadInfo(engine, targetVersion)
+                val buildName = downloadInfo?.first ?: "${engine.displayName} $targetVersion"
+                val downloadUrl = downloadInfo?.second ?: serverJarDownloader.getFallbackDownloadUrl(engine, targetVersion)
 
-                appendLog("[PaperMC] Wybrany build: $buildName")
-                val success = foliaDownloader.downloadFolia(targetVersion, downloadUrl) { percent, msg ->
+                appendLog("[${engine.displayName}] Wybrany build: $buildName")
+                val success = serverJarDownloader.downloadServerJar(engine, targetVersion, downloadUrl) { percent, msg ->
                     _serverState.update { it.copy(errorMessage = msg) }
                     if (percent % 25 == 0 || percent == 100) {
                         appendLog("[Pobieranie] $msg")
                     }
                 }
 
-                if (!success || !foliaJar.exists()) {
+                if (!success || !serverJar.exists()) {
                     _serverState.update {
                         it.copy(
                             status = ServerStatus.ERROR,
-                            errorMessage = "Błąd pobierania silnika Folia. Sprawdź połączenie z Internetem."
+                            errorMessage = "Błąd pobierania silnika ${engine.displayName}. Sprawdź połączenie z Internetem."
                         )
                     }
-                    appendLog("[BŁĄD] Nie udało się pobrać pliku folia.jar.")
+                    appendLog("[BŁĄD] Nie udało się pobrać pliku silnika (${serverJar.name}).")
                     return@launch
                 }
 
-                _serverState.update { it.copy(installedFoliaVersion = targetVersion) }
-                appendLog("[PaperMC] Silnik Folia $targetVersion pobrany pomyślnie (${foliaJar.length() / (1024 * 1024)} MB)!")
+                _serverState.update {
+                    it.copy(
+                        isInstalled = true,
+                        installedVersion = targetVersion,
+                        selectedVersion = targetVersion
+                    )
+                }
+                appendLog("[${engine.displayName}] Silnik ${engine.displayName} $targetVersion pobrany pomyślnie (${serverJar.length() / (1024 * 1024)} MB)!")
                 configManager.ensureEulaAccepted()
             }
 
             _serverState.update { it.copy(errorMessage = null) }
-            launchServerProcess(ramGb, cores, foliaJar)
+            launchServerProcess(ramGb, cores, engine, serverJar)
         }
     }
 
-    private suspend fun launchServerProcess(ramGb: Float, cores: Int, foliaJar: java.io.File) {
+    private suspend fun launchServerProcess(ramGb: Float, cores: Int, engine: ServerEngine, serverJar: java.io.File) {
         try {
             val javaExe = javaRuntimeManager.findJavaExecutable()
             if (javaExe == null || !javaExe.exists()) {
@@ -259,19 +325,36 @@ class ServerProcessManager(
 
             val tempDir = java.io.File(context.cacheDir, "tmp").apply { mkdirs() }
 
-            // Zoptymalizowane flagi JVM dla procesorów ARM64 i silnika Folia na Androidzie
+            // Zoptymalizowane flagi JVM dla procesorów ARM64 i wybranego silnika na Androidzie
             val command = arrayListOf(
                 javaPath,
                 "-Xms512M",
                 "-Xmx${ramInt}G",
-                "-XX:ActiveProcessorCount=$cores",
-                "-Dpaper.worker-threads=$cores",
-                "-Dfolia.region-threads=${maxOf(1, cores - 1)}",
-                "-Dfolia.threads=$cores",
+                "-XX:ActiveProcessorCount=$cores"
+            )
+
+            // Flagi specyficzne dla danego silnika:
+            when (engine) {
+                ServerEngine.FOLIA -> {
+                    command.add("-Dpaper.worker-threads=$cores")
+                    command.add("-Dfolia.region-threads=${maxOf(1, cores - 1)}")
+                    command.add("-Dfolia.threads=$cores")
+                    command.add("-Dpaper.playerconnection.keepalive=60")
+                }
+                ServerEngine.PURPUR -> {
+                    command.add("-Dpaper.worker-threads=$cores")
+                    command.add("-Dpurpur.worker-threads=$cores")
+                    command.add("-Dpaper.playerconnection.keepalive=60")
+                }
+                ServerEngine.FABRIC -> {
+                    // Fabric nie wymaga flag Paper/Folia
+                }
+            }
+
+            command.addAll(listOf(
                 "-Djava.io.tmpdir=${tempDir.absolutePath}",
                 "-Dterminal.jline=false",
                 "-Dterminal.ansi=true",
-                "-Dpaper.playerconnection.keepalive=60",
                 "-XX:+UseG1GC",
                 "-XX:+ParallelRefProcEnabled",
                 "-XX:MaxGCPauseMillis=200",
@@ -283,9 +366,9 @@ class ServerProcessManager(
                 "-XX:SurvivorRatio=32",
                 "-Dusing.aikars.flags=https://mcflags.emc.gs",
                 "-jar",
-                foliaJar.absolutePath,
+                serverJar.absolutePath,
                 "nogui"
-            )
+            ))
 
             val processBuilder = ProcessBuilder(command)
             processBuilder.directory(serverDir)
@@ -302,7 +385,7 @@ class ServerProcessManager(
             process = proc
             processWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
 
-            appendLog("=== URUCHAMIANIE SERWERA FOLIA (RAM: ${ramInt}GB, Rdzenie: $cores) ===")
+            appendLog("=== URUCHAMIANIE SERWERA ${engine.displayName.uppercase()} (RAM: ${ramInt}GB, Rdzenie: $cores) ===")
 
             // Czytanie wyjścia serwera
             val reader = BufferedReader(InputStreamReader(proc.inputStream))

@@ -15,12 +15,39 @@ class ConfigManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("minecraft_mobile_prefs", Context.MODE_PRIVATE)
 
+    fun getSelectedEngine(): ServerEngine {
+        val id = prefs.getString("selected_engine", "folia") ?: "folia"
+        return ServerEngine.fromId(id)
+    }
+
+    fun setSelectedEngine(engine: ServerEngine) {
+        prefs.edit().putString("selected_engine", engine.id).apply()
+    }
+
+    fun getSelectedVersion(engine: ServerEngine = getSelectedEngine()): String {
+        val key = "version_${engine.id}"
+        val defaultVer = when (engine) {
+            ServerEngine.FOLIA -> prefs.getString("folia_version", "26.2") ?: "26.2"
+            ServerEngine.PURPUR -> "1.21.4"
+            ServerEngine.FABRIC -> "1.21.4"
+        }
+        return prefs.getString(key, defaultVer) ?: defaultVer
+    }
+
+    fun setSelectedVersion(engine: ServerEngine, version: String) {
+        val edit = prefs.edit().putString("version_${engine.id}", version)
+        if (engine == ServerEngine.FOLIA) {
+            edit.putString("folia_version", version)
+        }
+        edit.apply()
+    }
+
     fun getSelectedFoliaVersion(): String {
-        return prefs.getString("folia_version", "26.2") ?: "26.2"
+        return getSelectedVersion(ServerEngine.FOLIA)
     }
 
     fun setSelectedFoliaVersion(version: String) {
-        prefs.edit().putString("folia_version", version).apply()
+        setSelectedVersion(ServerEngine.FOLIA, version)
     }
 
     fun getAllocatedCores(): Int {
@@ -48,6 +75,11 @@ class ConfigManager(private val context: Context) {
 
     val pluginsDir: File
         get() = File(serverDir, "plugins").apply {
+            if (!exists()) mkdirs()
+        }
+
+    val modsDir: File
+        get() = File(serverDir, "mods").apply {
             if (!exists()) mkdirs()
         }
 
