@@ -35,7 +35,7 @@ gcloud compute instances create $INSTANCE_NAME `
     --boot-disk-size=15GB `
     --boot-disk-type=pd-standard `
     --tags=minecraft-relay,http-server,https-server `
-    --metadata=startup-script-url=https://raw.githubusercontent.com/pearium/minecraft-relay/main/setup_relay.sh `
+    --metadata-from-file=startup-script="$PSScriptRoot\setup_relay.sh" `
     --quiet
 
 Write-Host "Pobieranie zewnętrznego adresu IP..." -ForegroundColor Yellow
