@@ -69,6 +69,7 @@ fun TunnelScreen(
     val context = LocalContext.current
     val status by tunnelManager.status.collectAsState()
     val config by tunnelManager.config.collectAsState()
+    val logs by tunnelManager.logs.collectAsState()
     val scrollState = rememberScrollState()
 
     var host by remember(config.serverHost) { mutableStateOf(config.serverHost) }
@@ -85,13 +86,13 @@ fun TunnelScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "Tunel Sieciowy i Domena",
+            text = "Tunel Sieciowy i Przekaźnik GCP",
             color = TextPrimary,
             fontWeight = FontWeight.Bold,
             fontSize = 20.sp
         )
         Text(
-            text = "Ominięcie braku publicznego IP przez maszynę GCP Spot",
+            text = "Ominięcie braku publicznego IP przez maszynę GCP Spot (Frankfurt)",
             color = TextSecondary,
             fontSize = 12.sp
         )
@@ -129,18 +130,22 @@ fun TunnelScreen(
                     Column {
                         Text(
                             text = when (status) {
-                                TunnelStatus.CONNECTED -> "Połączono z pearium.com"
-                                TunnelStatus.CONNECTING -> "Nawiązywanie tunelu..."
-                                TunnelStatus.DISCONNECTED -> "Tunel rozłączony"
-                                TunnelStatus.ERROR -> "Błąd połączenia z GCP"
+                                TunnelStatus.CONNECTED -> "Tunel aktywny (GCP)"
+                                TunnelStatus.CONNECTING -> "Łączenie tunelu..."
+                                TunnelStatus.DISCONNECTED -> "Tunel wyłączony"
+                                TunnelStatus.ERROR -> "Błąd tunelu"
                             },
                             color = TextPrimary,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 15.sp
                         )
                         Text(
-                            text = "Port Minecraft: 25565 -> GCP:25565",
-                            color = TextSecondary,
+                            text = if (status == TunnelStatus.CONNECTED) {
+                                "Adres gry: ${config.serverHost}:25565"
+                            } else {
+                                "Port 25565 -> GCP:${config.remotePort}"
+                            },
+                            color = if (status == TunnelStatus.CONNECTED) EmeraldGreen else TextSecondary,
                             fontSize = 12.sp
                         )
                     }
@@ -148,7 +153,7 @@ fun TunnelScreen(
 
                 Button(
                     onClick = {
-                        if (status == TunnelStatus.CONNECTED) {
+                        if (status == TunnelStatus.CONNECTED || status == TunnelStatus.CONNECTING) {
                             tunnelManager.stopTunnel()
                         } else {
                             tunnelManager.startTunnel()
@@ -165,6 +170,38 @@ fun TunnelScreen(
                         fontWeight = FontWeight.Bold
                     )
                 }
+            }
+        }
+
+        // Karta instrukcji połączenia z PC
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = CardBackground),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.Dns, contentDescription = null, tint = EmeraldGreen)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Jak połączyć się z PC w Minecraft?",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "1. Bezpośredni adres IP (działa od razu):\n" +
+                            "Wpisz w kliencie Minecraft na PC w polu Adres Serwera:\n" +
+                            "34.185.160.5\n\n" +
+                            "2. Łączenie przez domenę (Cloudflare):\n" +
+                            "Główna domena pearium.com ma włączony filtr Cloudflare HTTP proxy, który blokuje pakiety gry Minecraft. Aby grać po nazwie domenowej, dodaj w Cloudflare subdomenę np. mc.pearium.com (Rekord A -> 34.185.160.5) z wyłączonym proxy (szara chmurka / DNS Only).",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
+                )
             }
         }
 
@@ -187,7 +224,7 @@ fun TunnelScreen(
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
-                    label = { Text("Adres domeny lub IP serwera GCP") },
+                    label = { Text("Adres IP serwera GCP") },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = EmeraldGreen,
@@ -272,7 +309,7 @@ fun TunnelScreen(
             }
         }
 
-        // Karta informacyjna jak działa routing pearium.com
+        // Karta Logów Tunelu FRP
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = CardBackground),
@@ -280,26 +317,38 @@ fun TunnelScreen(
             shape = RoundedCornerShape(16.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Dns, contentDescription = null, tint = EmeraldGreen)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Jak działa domena pearium.com?",
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "• Przeglądarka internetowa (Port 80 i 443):\n" +
-                            "Otwiera stronę aplikacji na serwerze GCP w Niemczech.\n\n" +
-                            "• Klient gry Minecraft (Port 25565):\n" +
-                            "Łącząc się z pearium.com, serwer przekaźnikowy kieruje ruch bezpośrednio do Twojego Xiaomi 11T Pro przez aktywny tunel, bez potrzeby publicznego IP u Twojego operatora.",
+                    text = "KONSOLA TUNELU FRP",
                     color = TextSecondary,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .background(ObsidianDark, RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    if (logs.isEmpty()) {
+                        Text(
+                            text = "Brak aktywnych logów tunelu.",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    } else {
+                        val displayLogs = logs.takeLast(15).joinToString("\n")
+                        Text(
+                            text = displayLogs,
+                            color = MintAccent,
+                            fontSize = 10.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            lineHeight = 14.sp
+                        )
+                    }
+                }
             }
         }
     }
