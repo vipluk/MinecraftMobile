@@ -295,6 +295,7 @@ fun MainContent(
                     serverState = serverState,
                     onStartServer = onStartServer,
                     onStopServer = onStopServer,
+                    onReloadServer = { onSendCommand("reload confirm") },
                     onRamChange = onRamChange,
                     onCoresChange = onCoresChange,
                     onEngineChange = onEngineChange,

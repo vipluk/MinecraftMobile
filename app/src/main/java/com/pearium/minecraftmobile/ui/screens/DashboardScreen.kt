@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
@@ -162,6 +163,7 @@ fun DashboardScreen(
     serverState: ServerState,
     onStartServer: (Float, Int) -> Unit,
     onStopServer: () -> Unit,
+    onReloadServer: () -> Unit = {},
     onRamChange: (Float) -> Unit,
     onCoresChange: (Int) -> Unit,
     onEngineChange: (ServerEngine) -> Unit = {},
@@ -883,6 +885,45 @@ fun DashboardScreen(
                     tint = TextPrimary
                 )
             }
+        }
+
+        // Przycisk RELOAD pod Zatrzymaj serwer
+        val isServerActive = serverState.status == ServerStatus.RUNNING
+        OutlinedButton(
+            onClick = {
+                if (isServerActive) {
+                    onReloadServer()
+                    Toast.makeText(context, "Wysłano polecenie przeładowania serwera (reload confirm)!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Serwer musi być uruchomiony, aby go przeładować!", Toast.LENGTH_SHORT).show()
+                }
+            },
+            enabled = isServerActive,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MintAccent,
+                disabledContentColor = TextSecondary.copy(alpha = 0.4f)
+            ),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (isServerActive) EmeraldGreen.copy(alpha = 0.6f) else CardBorder
+            )
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "Reload",
+                tint = if (isServerActive) MintAccent else TextSecondary.copy(alpha = 0.4f),
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "RELOAD (Przeładuj pluginy i konfigurację)",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
         }
 
         // 5. Karta Adresu Serwera (pearium.com)

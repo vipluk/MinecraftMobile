@@ -2,6 +2,8 @@ package com.pearium.minecraftmobile.ui.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +55,7 @@ import com.pearium.minecraftmobile.ui.theme.CardBorder
 import com.pearium.minecraftmobile.ui.theme.ConsoleBackground
 import com.pearium.minecraftmobile.ui.theme.DarkEmerald
 import com.pearium.minecraftmobile.ui.theme.EmeraldGreen
+import com.pearium.minecraftmobile.ui.theme.MintAccent
 import com.pearium.minecraftmobile.ui.theme.ObsidianDark
 import com.pearium.minecraftmobile.ui.theme.TextPrimary
 import com.pearium.minecraftmobile.ui.theme.TextSecondary
@@ -251,6 +254,69 @@ fun FileManagerScreen(
                                     checkedTrackColor = DarkEmerald
                                 )
                             )
+                        }
+
+                        // Poziom trudności (Difficulty)
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "Poziom trudności serwera",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = "Wybierz trudność świata Minecraft (pokojowy, łatwy, normalny, trudny)",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            val currentDiff = properties["difficulty"]?.lowercase()?.trim() ?: "normal"
+                            val difficulties = listOf(
+                                Triple("peaceful", "Pokojowy", "Bez potworów"),
+                                Triple("easy", "Łatwy", "Niskie obrażenia"),
+                                Triple("normal", "Normalny", "Standardowy"),
+                                Triple("hard", "Trudny", "Wysokie wyzwanie")
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                difficulties.forEach { (id, label, desc) ->
+                                    val isSelected = currentDiff == id
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) DarkEmerald else ObsidianDark)
+                                            .border(
+                                                1.dp,
+                                                if (isSelected) EmeraldGreen else CardBorder,
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { properties["difficulty"] = id }
+                                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text(
+                                                text = label,
+                                                color = if (isSelected) MintAccent else TextPrimary,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                fontSize = 12.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = desc,
+                                                color = if (isSelected) MintAccent.copy(alpha = 0.8f) else TextSecondary,
+                                                fontSize = 9.sp,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Przycisk Zapisu
