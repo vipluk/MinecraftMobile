@@ -156,6 +156,8 @@ class ServerProcessManager(
                 javaPath,
                 "-Xms512M",
                 "-Xmx${ramInt}G",
+                "-Djava.specification.version=25",
+                "-DPaper.IgnoreJavaVersion=true",
                 "-Djava.io.tmpdir=${tempDir.absolutePath}",
                 "-Dterminal.jline=false",
                 "-Dterminal.ansi=true",
