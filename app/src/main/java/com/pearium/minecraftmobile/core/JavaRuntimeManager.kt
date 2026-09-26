@@ -31,7 +31,9 @@ class JavaRuntimeManager(private val context: Context) {
         if (exe == null || !exe.exists() || exe.length() == 0L) return false
         val versionFile = File(jreDir, "version.txt")
         if (!versionFile.exists()) return false
-        return versionFile.readText().trim() == "25"
+        if (versionFile.readText().trim() != "25.1") return false
+        val securityFile = File(jreDir, "conf/security/java.security")
+        return securityFile.exists() && securityFile.length() > 0
     }
 
     fun getExecutablePath(): String {
@@ -61,6 +63,9 @@ class JavaRuntimeManager(private val context: Context) {
     ): Boolean = withContext(Dispatchers.IO) {
         val urlsToTry = listOf(PRIMARY_JRE_ARM64_URL, FALLBACK_JRE_ARM64_URL)
         val tempZip = File(context.cacheDir, "jre25_arm64.zip")
+        if (tempZip.exists()) {
+            tempZip.delete()
+        }
 
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -129,7 +134,7 @@ class JavaRuntimeManager(private val context: Context) {
             tempZip.delete()
 
             // Zapisz znacznik wersji
-            File(jreDir, "version.txt").writeText("25")
+            File(jreDir, "version.txt").writeText("25.1")
 
             onProgress(98, "Konfigurowanie uprawnień systemowych...")
             grantExecutionPermissions(jreDir)
