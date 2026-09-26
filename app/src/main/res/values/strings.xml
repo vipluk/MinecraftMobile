@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">MinecraftMobile</string>
+    <string name="server_running">Serwer Minecraft (Folia) jest aktywny</string>
+    <string name="server_stopped">Serwer Minecraft jest zatrzymany</string>
+    <string name="channel_name">Usługa Serwera Minecraft</string>
+    <string name="channel_desc">Powiadomienie o aktywnym procesie serwera Minecraft i tunelu</string>
+</resources>

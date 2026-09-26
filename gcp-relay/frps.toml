@@ -1,0 +1,14 @@
+# Konfiguracja serwera FRP na maszynie GCP (Niemcy)
+bindPort = 7000
+auth.token = "pearium-mc-secret-2026"
+
+# Panel sterowania webowego FRP (opcjonalny, dostępny na porcie 7500)
+webServer.addr = "0.0.0.0"
+webServer.port = 7500
+webServer.user = "admin"
+webServer.password = "pearium2026admin"
+
+# Zakres dozwolonych portów dla proxy Minecrafta
+allowPorts = [
+  { start = 25565, end = 25565 }
+]
