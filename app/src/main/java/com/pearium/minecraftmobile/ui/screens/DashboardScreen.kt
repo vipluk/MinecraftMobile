@@ -169,15 +169,20 @@ fun DashboardScreen(
                 }
 
                 serverState.errorMessage?.let { errorMsg ->
+                    val isInfo = serverState.status == ServerStatus.STARTING || errorMsg.startsWith("Pobieranie")
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = errorMsg,
-                        color = DangerRed,
+                        color = if (isInfo) MintAccent else DangerRed,
                         fontSize = 13.sp,
+                        fontWeight = if (isInfo) FontWeight.Medium else FontWeight.Normal,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(DangerRed.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                            .padding(8.dp)
+                            .background(
+                                (if (isInfo) EmeraldGreen else DangerRed).copy(alpha = 0.15f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                 }
             }

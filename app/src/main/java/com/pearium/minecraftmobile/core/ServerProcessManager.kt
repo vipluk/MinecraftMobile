@@ -51,19 +51,58 @@ class ServerProcessManager(
             return
         }
 
+        // Zawsze upewnij się, że EULA jest zaakceptowana (eula=true)
+        configManager.ensureEulaAccepted()
+
         val foliaJar = foliaDownloader.getFoliaJar()
         if (!foliaJar.exists()) {
             _serverState.update {
                 it.copy(
-                    status = ServerStatus.ERROR,
-                    errorMessage = "Brak pliku silnika folia.jar! Pobierz go w zakładce Ustawienia."
+                    status = ServerStatus.STARTING,
+                    allocatedRamGb = ramGb,
+                    errorMessage = "Pobieranie silnika Folia 26.2...",
+                    uptimeSeconds = 0,
+                    playersOnline = 0
                 )
+            }
+
+            scope.launch {
+                appendLog("=== POBIERANIE SILNIKA FOLIA (Wersja 26.2 Eksperymentalna) ===")
+                appendLog("[EULA] Automatycznie zatwierdzono eula.txt (eula=true).")
+                configManager.ensureEulaAccepted()
+
+                appendLog("[PaperMC] Pobieranie informacji o Folia 26.2 z PaperMC Fill v3 API...")
+                val downloadInfo = foliaDownloader.fetchLatestDownloadInfo("26.2")
+                val buildName = downloadInfo?.first ?: "Folia 26.2 (Eksperymentalna)"
+                val downloadUrl = downloadInfo?.second ?: "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
+
+                appendLog("[PaperMC] Wybrany build: $buildName")
+                val success = foliaDownloader.downloadFolia(downloadUrl) { percent, msg ->
+                    _serverState.update { it.copy(errorMessage = msg) }
+                    if (percent % 25 == 0 || percent == 100) {
+                        appendLog("[Pobieranie] $msg")
+                    }
+                }
+
+                if (!success || !foliaJar.exists()) {
+                    _serverState.update {
+                        it.copy(
+                            status = ServerStatus.ERROR,
+                            errorMessage = "Błąd pobierania silnika Folia. Sprawdź połączenie z Internetem."
+                        )
+                    }
+                    appendLog("[BŁĄD] Nie udało się pobrać pliku folia.jar.")
+                    return@launch
+                }
+
+                appendLog("[PaperMC] Silnik Folia 26.2 pobrany pomyślnie (${foliaJar.length() / (1024 * 1024)} MB)!")
+                configManager.ensureEulaAccepted()
+                _serverState.update { it.copy(errorMessage = null) }
+
+                launchServerProcess(ramGb, foliaJar)
             }
             return
         }
-
-        // Upewnij się że EULA jest zaakceptowana
-        configManager.ensureEulaAccepted()
 
         _serverState.update {
             it.copy(
@@ -76,98 +115,102 @@ class ServerProcessManager(
         }
 
         scope.launch {
-            try {
-                val javaPath = javaRuntimeManager.getExecutablePath()
-                val serverDir = configManager.serverDir
-                val ramInt = ramGb.toInt()
+            launchServerProcess(ramGb, foliaJar)
+        }
+    }
 
-                // Zoptymalizowane flagi JVM Aikar dla procesorów ARM64 i silnika Folia
-                val command = arrayListOf(
-                    javaPath,
-                    "-Xms${ramInt}G",
-                    "-Xmx${ramInt}G",
-                    "-XX:+UseG1GC",
-                    "-XX:+ParallelRefProcEnabled",
-                    "-XX:MaxGCPauseMillis=200",
-                    "-XX:+UnlockExperimentalVMOptions",
-                    "-XX:+DisableExplicitGC",
-                    "-XX:+AlwaysPreTouch",
-                    "-XX:G1NewSizePercent=30",
-                    "-XX:G1MaxNewSizePercent=40",
-                    "-XX:G1ReservePercent=20",
-                    "-XX:G1HeapWastePercent=5",
-                    "-XX:G1MixedGCCountTarget=4",
-                    "-XX:InitiatingHeapOccupancyPercent=15",
-                    "-XX:G1MixedGCLiveThresholdPercent=90",
-                    "-XX:G1RSetUpdatingPauseTimePercent=5",
-                    "-XX:SurvivorRatio=32",
-                    "-XX:+PerfDisableSharedMem",
-                    "-XX:MaxTenuringThreshold=1",
-                    "-Dusing.aikars.flags=https://mcflags.emc.gs",
-                    "-Daikars.new.flags=true",
-                    "-jar",
-                    foliaJar.absolutePath,
-                    "nogui"
-                )
+    private suspend fun launchServerProcess(ramGb: Float, foliaJar: java.io.File) {
+        try {
+            val javaPath = javaRuntimeManager.getExecutablePath()
+            val serverDir = configManager.serverDir
+            val ramInt = ramGb.toInt()
 
-                val processBuilder = ProcessBuilder(command)
-                processBuilder.directory(serverDir)
-                processBuilder.redirectErrorStream(true)
+            // Zoptymalizowane flagi JVM Aikar dla procesorów ARM64 i silnika Folia
+            val command = arrayListOf(
+                javaPath,
+                "-Xms${ramInt}G",
+                "-Xmx${ramInt}G",
+                "-XX:+UseG1GC",
+                "-XX:+ParallelRefProcEnabled",
+                "-XX:MaxGCPauseMillis=200",
+                "-XX:+UnlockExperimentalVMOptions",
+                "-XX:+DisableExplicitGC",
+                "-XX:+AlwaysPreTouch",
+                "-XX:G1NewSizePercent=30",
+                "-XX:G1MaxNewSizePercent=40",
+                "-XX:G1ReservePercent=20",
+                "-XX:G1HeapWastePercent=5",
+                "-XX:G1MixedGCCountTarget=4",
+                "-XX:InitiatingHeapOccupancyPercent=15",
+                "-XX:G1MixedGCLiveThresholdPercent=90",
+                "-XX:G1RSetUpdatingPauseTimePercent=5",
+                "-XX:SurvivorRatio=32",
+                "-XX:+PerfDisableSharedMem",
+                "-XX:MaxTenuringThreshold=1",
+                "-Dusing.aikars.flags=https://mcflags.emc.gs",
+                "-Daikars.new.flags=true",
+                "-jar",
+                foliaJar.absolutePath,
+                "nogui"
+            )
 
-                // Ustaw zmienne środowiskowe dla Android ARM64
-                val env = processBuilder.environment()
-                env["JAVA_HOME"] = javaRuntimeManager.jreDir.absolutePath
-                env["PATH"] = "${javaRuntimeManager.jreDir.absolutePath}/bin:" + (env["PATH"] ?: "")
-                env["LD_LIBRARY_PATH"] = "${javaRuntimeManager.jreDir.absolutePath}/lib:" + (env["LD_LIBRARY_PATH"] ?: "")
+            val processBuilder = ProcessBuilder(command)
+            processBuilder.directory(serverDir)
+            processBuilder.redirectErrorStream(true)
 
-                val proc = processBuilder.start()
-                process = proc
-                processWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
+            // Ustaw zmienne środowiskowe dla Android ARM64
+            val env = processBuilder.environment()
+            env["JAVA_HOME"] = javaRuntimeManager.jreDir.absolutePath
+            env["PATH"] = "${javaRuntimeManager.jreDir.absolutePath}/bin:" + (env["PATH"] ?: "")
+            env["LD_LIBRARY_PATH"] = "${javaRuntimeManager.jreDir.absolutePath}/lib:" + (env["LD_LIBRARY_PATH"] ?: "")
 
-                appendLog("=== URUCHAMIANIE SERWERA FOLIA (RAM: ${ramInt}GB) ===")
+            val proc = processBuilder.start()
+            process = proc
+            processWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
 
-                // Uruchom pętlę statystyk i czasu działania
-                startStatsLoop()
+            appendLog("=== URUCHAMIANIE SERWERA FOLIA (RAM: ${ramInt}GB) ===")
 
-                // Czytanie wyjścia serwera
-                val reader = BufferedReader(InputStreamReader(proc.inputStream))
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    val logLine = line ?: continue
-                    appendLog(logLine)
+            // Uruchom pętlę statystyk i czasu działania
+            startStatsLoop()
 
-                    // Sprawdź czy serwer zakończył start
-                    if (logLine.contains("Done (") || logLine.contains("Timings Reset")) {
-                        _serverState.update { it.copy(status = ServerStatus.RUNNING) }
-                    }
+            // Czytanie wyjścia serwera
+            val reader = BufferedReader(InputStreamReader(proc.inputStream))
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val logLine = line ?: continue
+                appendLog(logLine)
 
-                    // Śledzenie graczy online z logów
-                    if (logLine.contains("logged in with entity id")) {
-                        _serverState.update { it.copy(playersOnline = it.playersOnline + 1) }
-                    } else if (logLine.contains("lost connection:")) {
-                        _serverState.update { it.copy(playersOnline = (it.playersOnline - 1).coerceAtLeast(0)) }
-                    }
+                // Sprawdź czy serwer zakończył start
+                if (logLine.contains("Done (") || logLine.contains("Timings Reset")) {
+                    _serverState.update { it.copy(status = ServerStatus.RUNNING) }
                 }
 
-                val exitCode = proc.waitFor()
-                appendLog("=== SERWER ZAKOŃCZYŁ DZIAŁANIE (Kod: $exitCode) ===")
-                stopStatsLoop()
-                _serverState.update { it.copy(status = ServerStatus.STOPPED, uptimeSeconds = 0, playersOnline = 0) }
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                appendLog("[BŁĄD] Nie udało się wystartować procesu: ${e.localizedMessage}")
-                stopStatsLoop()
-                _serverState.update {
-                    it.copy(
-                        status = ServerStatus.ERROR,
-                        errorMessage = e.localizedMessage
-                    )
+                // Śledzenie graczy online z logów
+                if (logLine.contains("logged in with entity id")) {
+                    _serverState.update { it.copy(playersOnline = it.playersOnline + 1) }
+                } else if (logLine.contains("lost connection:")) {
+                    _serverState.update { it.copy(playersOnline = (it.playersOnline - 1).coerceAtLeast(0)) }
                 }
-            } finally {
-                process = null
-                processWriter = null
             }
+
+            val exitCode = proc.waitFor()
+            appendLog("=== SERWER ZAKOŃCZYŁ DZIAŁANIE (Kod: $exitCode) ===")
+            stopStatsLoop()
+            _serverState.update { it.copy(status = ServerStatus.STOPPED, uptimeSeconds = 0, playersOnline = 0) }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            appendLog("[BŁĄD] Nie udało się wystartować procesu: ${e.localizedMessage}")
+            stopStatsLoop()
+            _serverState.update {
+                it.copy(
+                    status = ServerStatus.ERROR,
+                    errorMessage = e.localizedMessage
+                )
+            }
+        } finally {
+            process = null
+            processWriter = null
         }
     }
 

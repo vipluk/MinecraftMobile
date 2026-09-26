@@ -29,35 +29,62 @@ class FoliaDownloader(private val context: Context) {
         return jar.exists() && jar.length() > 10 * 1024 * 1024 // min 10 MB
     }
 
-    suspend fun fetchLatestDownloadInfo(): Pair<String, String>? = withContext(Dispatchers.IO) {
+    suspend fun fetchLatestDownloadInfo(targetVersion: String = "26.2"): Pair<String, String>? = withContext(Dispatchers.IO) {
         try {
-            // 1. Pobierz listę wersji projektu Folia
-            val projectUrl = "https://api.papermc.io/v2/projects/folia"
-            val projectReq = Request.Builder().url(projectUrl).build()
-            val projectResp = client.newCall(projectReq).execute()
-            if (!projectResp.isSuccessful) return@withContext null
+            // PaperMC Fill v3 API dla Folia
+            val url = "https://fill.papermc.io/v3/projects/folia/versions/$targetVersion/builds"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "MinecraftMobile/1.0 (pearium.com)")
+                .build()
 
-            val projectJson = gson.fromJson(projectResp.body?.string(), JsonObject::class.java)
-            val versions = projectJson.getAsJsonArray("versions")
-            val latestVersion = versions[versions.size() - 1].asString
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext getFallbackDownloadInfo(targetVersion)
 
-            // 2. Pobierz najnowszy build danej wersji
-            val versionUrl = "https://api.papermc.io/v2/projects/folia/versions/$latestVersion"
-            val versionReq = Request.Builder().url(versionUrl).build()
-            val versionResp = client.newCall(versionReq).execute()
-            if (!versionResp.isSuccessful) return@withContext null
+            val responseBody = response.body?.string() ?: return@withContext getFallbackDownloadInfo(targetVersion)
+            val jsonArray = gson.fromJson(responseBody, com.google.gson.JsonArray::class.java)
 
-            val versionJson = gson.fromJson(versionResp.body?.string(), JsonObject::class.java)
-            val builds = versionJson.getAsJsonArray("builds")
-            val latestBuild = builds[builds.size() - 1].asString
+            if (jsonArray.size() == 0) return@withContext getFallbackDownloadInfo(targetVersion)
 
-            // 3. Zbuduj URL do pobrania
-            val downloadUrl = "https://api.papermc.io/v2/projects/folia/versions/$latestVersion/builds/$latestBuild/downloads/folia-$latestVersion-$latestBuild.jar"
-            return@withContext Pair("Folia $latestVersion (build #$latestBuild)", downloadUrl)
+            // Pobierz build o najwyższym ID
+            var latestBuildObj: JsonObject? = null
+            var maxId = -1
+
+            for (element in jsonArray) {
+                if (element.isJsonObject) {
+                    val obj = element.asJsonObject
+                    val id = obj.get("id")?.asInt ?: -1
+                    if (id > maxId) {
+                        maxId = id
+                        latestBuildObj = obj
+                    }
+                }
+            }
+
+            if (latestBuildObj == null) return@withContext getFallbackDownloadInfo(targetVersion)
+
+            val downloads = latestBuildObj.getAsJsonObject("downloads")
+            val serverDefault = downloads.getAsJsonObject("server:default")
+            val downloadUrl = serverDefault.get("url").asString
+
+            return@withContext Pair("Folia $targetVersion (build #$maxId - Eksperymentalna)", downloadUrl)
         } catch (e: Exception) {
             e.printStackTrace()
-            // Fallback na stabilny mirror / wersję 1.20.4
-            return@withContext Pair("Folia 1.20.4 (Stable)", "https://api.papermc.io/v2/projects/folia/versions/1.20.4/builds/30/downloads/folia-1.20.4-30.jar")
+            return@withContext getFallbackDownloadInfo(targetVersion)
+        }
+    }
+
+    private fun getFallbackDownloadInfo(targetVersion: String): Pair<String, String> {
+        return if (targetVersion == "26.2") {
+            Pair(
+                "Folia 26.2 build #7 (Eksperymentalna)",
+                "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
+            )
+        } else {
+            Pair(
+                "Folia 26.2 (Stable)",
+                "https://fill-data.papermc.io/v1/objects/128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3/folia-26.2-7.jar"
+            )
         }
     }
 
@@ -66,8 +93,11 @@ class FoliaDownloader(private val context: Context) {
         onProgress: (Int, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            onProgress(0, "Łączenie z PaperMC API...")
-            val request = Request.Builder().url(downloadUrl).build()
+            onProgress(0, "Łączenie z serwerem PaperMC...")
+            val request = Request.Builder()
+                .url(downloadUrl)
+                .header("User-Agent", "MinecraftMobile/1.0 (pearium.com)")
+                .build()
             val response = client.newCall(request).execute()
 
             if (!response.isSuccessful) {
@@ -82,7 +112,7 @@ class FoliaDownloader(private val context: Context) {
 
             body.byteStream().use { input ->
                 FileOutputStream(destinationFile).use { output ->
-                    val buffer = ByteArray(8 * 1024)
+                    val buffer = ByteArray(32 * 1024)
                     var bytesRead: Int
                     var totalRead: Long = 0
 
@@ -93,12 +123,12 @@ class FoliaDownloader(private val context: Context) {
                             val percent = ((totalRead * 100) / totalBytes).toInt()
                             val mbRead = totalRead / (1024 * 1024)
                             val mbTotal = totalBytes / (1024 * 1024)
-                            onProgress(percent, "Pobieranie Folia: $mbRead MB / $mbTotal MB ($percent%)")
+                            onProgress(percent, "Pobieranie Folia 26.2: $mbRead MB / $mbTotal MB ($percent%)")
                         }
                     }
                 }
             }
-            onProgress(100, "Silnik Folia pobrany pomyślnie!")
+            onProgress(100, "Silnik Folia 26.2 pobrany pomyślnie!")
             true
         } catch (e: Exception) {
             e.printStackTrace()
