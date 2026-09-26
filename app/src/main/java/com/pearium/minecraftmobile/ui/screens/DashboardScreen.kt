@@ -101,18 +101,25 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.withStyle
 import com.pearium.minecraftmobile.core.ConfigManager
+import com.pearium.minecraftmobile.core.sanitizeMinecraftFormatting
 
 fun parseMinecraftMotd(motd: String): AnnotatedString {
+    val clean = sanitizeMinecraftFormatting(motd)
     return buildAnnotatedString {
         var currentColor = Color(0xFFAAAAAA)
         var isBold = false
         var isItalic = false
 
         var i = 0
-        while (i < motd.length) {
-            val c = motd[i]
-            if ((c == '§' || c == '&') && i + 1 < motd.length) {
-                when (motd[i + 1].lowercaseChar()) {
+        while (i < clean.length) {
+            val c = clean[i]
+            // Usuwanie ewentualnego artefaktu Latin-1 / UTF-8 'Â' (\u00C2)
+            if (c == 'Â' || c == '\u00C2') {
+                i++
+                continue
+            }
+            if ((c == '§' || c == '&') && i + 1 < clean.length) {
+                when (clean[i + 1].lowercaseChar()) {
                     '0' -> { currentColor = Color(0xFF000000); isBold = false; isItalic = false }
                     '1' -> { currentColor = Color(0xFF0000AA); isBold = false; isItalic = false }
                     '2' -> { currentColor = Color(0xFF00AA00); isBold = false; isItalic = false }
@@ -182,7 +189,7 @@ fun DashboardScreen(
 
     var versionDropdownExpanded by remember { mutableStateOf(false) }
 
-    var motdText by remember(serverState.motd) { mutableStateOf(serverState.motd) }
+    var motdText by remember(serverState.motd) { mutableStateOf(sanitizeMinecraftFormatting(serverState.motd)) }
     var serverIconBitmap by remember(serverState.hasCustomIcon) { mutableStateOf(configManager?.getServerIconBitmap()) }
     var isEditingAppearance by remember { mutableStateOf(false) }
 
@@ -1120,7 +1127,7 @@ fun DashboardScreen(
 
                     OutlinedTextField(
                         value = motdText,
-                        onValueChange = { motdText = it },
+                        onValueChange = { motdText = sanitizeMinecraftFormatting(it) },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Treść MOTD (użyj §a, §b itp.)") },
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1172,7 +1179,9 @@ fun DashboardScreen(
 
                     Button(
                         onClick = {
-                            onUpdateMotd(motdText)
+                            val clean = sanitizeMinecraftFormatting(motdText)
+                            motdText = clean
+                            onUpdateMotd(clean)
                             Toast.makeText(context, "Zapisano opis MOTD w server.properties!", Toast.LENGTH_SHORT).show()
                             isEditingAppearance = false
                         },

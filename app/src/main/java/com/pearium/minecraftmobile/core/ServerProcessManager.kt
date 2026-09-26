@@ -49,7 +49,7 @@ class ServerProcessManager(
         val savedVersion = configManager.getSelectedVersion(savedEngine)
         val isInstalled = serverJarDownloader.isEngineVersionInstalled(savedEngine, savedVersion)
         configManager.ensureDefaultIcon()
-        val savedMotd = configManager.getMotd()
+        val savedMotd = sanitizeMinecraftFormatting(configManager.getMotd())
         val hasIcon = configManager.getServerIconFile().exists()
 
         _serverState.update {
@@ -81,9 +81,10 @@ class ServerProcessManager(
     }
 
     fun setMotd(newMotd: String) {
-        configManager.setMotd(newMotd)
-        _serverState.update { it.copy(motd = newMotd) }
-        appendLog("[KONFIGURACJA] Zaktualizowano opis serwera (MOTD): $newMotd")
+        val clean = sanitizeMinecraftFormatting(newMotd)
+        configManager.setMotd(clean)
+        _serverState.update { it.copy(motd = clean) }
+        appendLog("[KONFIGURACJA] Zaktualizowano opis serwera (MOTD): $clean")
     }
 
     fun setServerIcon(bitmap: android.graphics.Bitmap) {

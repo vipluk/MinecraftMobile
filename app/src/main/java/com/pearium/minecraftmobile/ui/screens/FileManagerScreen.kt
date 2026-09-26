@@ -57,6 +57,8 @@ import com.pearium.minecraftmobile.ui.theme.ObsidianDark
 import com.pearium.minecraftmobile.ui.theme.TextPrimary
 import com.pearium.minecraftmobile.ui.theme.TextSecondary
 
+import com.pearium.minecraftmobile.core.sanitizeMinecraftFormatting
+
 @Composable
 fun FileManagerScreen(
     configManager: ConfigManager
@@ -156,8 +158,8 @@ fun FileManagerScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         // MOTD
                         OutlinedTextField(
-                            value = properties["motd"] ?: "",
-                            onValueChange = { properties["motd"] = it },
+                            value = sanitizeMinecraftFormatting(properties["motd"] ?: ""),
+                            onValueChange = { properties["motd"] = sanitizeMinecraftFormatting(it) },
                             label = { Text("Opis serwera (MOTD)") },
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(

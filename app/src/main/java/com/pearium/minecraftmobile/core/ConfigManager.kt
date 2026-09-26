@@ -6,10 +6,22 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.Properties
+
+fun sanitizeMinecraftFormatting(text: String): String {
+    return text
+        .replace("Â§", "§")
+        .replace("Â&", "&")
+        .replace("\u00C2\u00A7", "§")
+        .replace("\u00C2", "")
+        .replace("\\u00A7", "§")
+        .replace("\\u00a7", "§")
+}
 
 class ConfigManager(private val context: Context) {
 
@@ -94,30 +106,48 @@ class ConfigManager(private val context: Context) {
             return defaultProperties()
         }
         val properties = Properties()
-        FileInputStream(file).use { properties.load(it) }
-        return properties.entries.associate { it.key.toString() to it.value.toString() }
+        try {
+            InputStreamReader(FileInputStream(file), Charsets.UTF_8).use { reader ->
+                properties.load(reader)
+            }
+        } catch (_: Exception) {
+            FileInputStream(file).use { properties.load(it) }
+        }
+        return properties.entries.associate { (k, v) ->
+            k.toString() to sanitizeMinecraftFormatting(v.toString())
+        }
     }
 
     fun updateProperties(newProps: Map<String, String>) {
         val file = File(serverDir, "server.properties")
         val properties = Properties()
         if (file.exists()) {
-            FileInputStream(file).use { properties.load(it) }
+            try {
+                InputStreamReader(FileInputStream(file), Charsets.UTF_8).use { reader ->
+                    properties.load(reader)
+                }
+            } catch (_: Exception) {
+                FileInputStream(file).use { properties.load(it) }
+            }
         } else {
             defaultProperties().forEach { (k, v) -> properties.setProperty(k, v) }
         }
-        newProps.forEach { (k, v) -> properties.setProperty(k, v) }
-        FileOutputStream(file).use {
-            properties.store(it, "MinecraftMobile Auto-Generated Server Configuration")
+        newProps.forEach { (k, v) ->
+            properties.setProperty(k, sanitizeMinecraftFormatting(v))
+        }
+        OutputStreamWriter(FileOutputStream(file), Charsets.UTF_8).use { writer ->
+            properties.store(writer, "MinecraftMobile Auto-Generated Server Configuration")
         }
     }
 
     fun getMotd(): String {
-        return readProperties()["motd"] ?: "§aMinecraft Mobile Server §7(Xiaomi 11T Pro)"
+        val motd = readProperties()["motd"] ?: "§aMinecraft Mobile Server §7(Xiaomi 11T Pro)"
+        return sanitizeMinecraftFormatting(motd)
     }
 
     fun setMotd(motd: String) {
-        updateProperties(mapOf("motd" to motd))
+        val clean = sanitizeMinecraftFormatting(motd)
+        updateProperties(mapOf("motd" to clean))
     }
 
     fun ensureDefaultIcon() {
