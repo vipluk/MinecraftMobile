@@ -28,7 +28,10 @@ class JavaRuntimeManager(private val context: Context) {
 
     fun isJavaInstalled(): Boolean {
         val exe = findJavaExecutable()
-        return exe != null && exe.exists() && exe.length() > 0
+        if (exe == null || !exe.exists() || exe.length() == 0L) return false
+        val versionFile = File(jreDir, "version.txt")
+        if (!versionFile.exists()) return false
+        return versionFile.readText().trim() == "25"
     }
 
     fun getExecutablePath(): String {
@@ -54,63 +57,88 @@ class JavaRuntimeManager(private val context: Context) {
     }
 
     suspend fun installJavaRuntime(
-        downloadUrl: String = DEFAULT_JRE_ARM64_URL,
         onProgress: (Int, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
+        val urlsToTry = listOf(PRIMARY_JRE_ARM64_URL, FALLBACK_JRE_ARM64_URL)
+        val tempZip = File(context.cacheDir, "jre25_arm64.zip")
+
         val client = OkHttpClient.Builder()
-            .connectTimeout(60, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
             .build()
-        val tempZip = File(context.cacheDir, "jre21_arm64.zip")
 
-        try {
-            onProgress(0, "Łączenie z serwerem OpenJDK 21...")
-            val request = Request.Builder()
-                .url(downloadUrl)
-                .header("User-Agent", "MinecraftMobile/1.0 (pearium.com)")
-                .build()
-            val response = client.newCall(request).execute()
+        var downloaded = false
+        for ((index, url) in urlsToTry.withIndex() ) {
+            try {
+                val mirrorName = if (index == 0) "GitHub CDN" else "Serwer Relay GCP"
+                onProgress(0, "Łączenie z serwerem OpenJDK 25 ($mirrorName)...")
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "MinecraftMobile/1.0 (pearium.com)")
+                    .build()
+                val response = client.newCall(request).execute()
 
-            if (!response.isSuccessful) {
-                onProgress(-1, "Błąd pobierania Java: HTTP ${response.code}")
-                return@withContext false
-            }
+                if (!response.isSuccessful) {
+                    continue
+                }
 
-            val body = response.body ?: return@withContext false
-            val totalBytes = body.contentLength()
+                val body = response.body ?: continue
+                val totalBytes = body.contentLength()
 
-            body.byteStream().use { input ->
-                FileOutputStream(tempZip).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var bytesRead: Int
-                    var totalRead: Long = 0
+                body.byteStream().use { input ->
+                    FileOutputStream(tempZip).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var bytesRead: Int
+                        var totalRead: Long = 0
 
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        totalRead += bytesRead
-                        if (totalBytes > 0) {
-                            val percent = ((totalRead * 100) / totalBytes).toInt()
-                            val mbRead = totalRead / (1024 * 1024)
-                            val mbTotal = totalBytes / (1024 * 1024)
-                            onProgress(percent, "Pobieranie Java 21: $mbRead MB / $mbTotal MB ($percent%)")
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            totalRead += bytesRead
+                            if (totalBytes > 0) {
+                                val percent = ((totalRead * 100) / totalBytes).toInt()
+                                val mbRead = totalRead / (1024 * 1024)
+                                val mbTotal = totalBytes / (1024 * 1024)
+                                onProgress(percent, "Pobieranie Java 25 ($mirrorName): $mbRead MB / $mbTotal MB ($percent%)")
+                            }
                         }
                     }
                 }
-            }
 
-            onProgress(95, "Rozpakowywanie środowiska Java 21...")
+                if (tempZip.exists() && tempZip.length() > 10 * 1024 * 1024) {
+                    downloaded = true
+                    break
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        if (!downloaded || !tempZip.exists()) {
+            onProgress(-1, "Błąd pobierania OpenJDK 25 ze wszystkich serwerów lustrzanych.")
+            return@withContext false
+        }
+
+        try {
+            onProgress(92, "Usuwanie starej wersji i rozpakowywanie OpenJDK 25...")
+            if (jreDir.exists()) {
+                jreDir.deleteRecursively()
+            }
             jreDir.mkdirs()
+
             unzip(tempZip, jreDir)
             tempZip.delete()
 
-            // Nadaj uprawnienia wykonywalne dla wszystkich binariów i bibliotek
+            // Zapisz znacznik wersji
+            File(jreDir, "version.txt").writeText("25")
+
+            onProgress(98, "Konfigurowanie uprawnień systemowych...")
             grantExecutionPermissions(jreDir)
 
-            onProgress(100, "Środowisko Java 21 gotowe!")
+            onProgress(100, "Środowisko OpenJDK 25 gotowe!")
             true
         } catch (e: Exception) {
             e.printStackTrace()
-            onProgress(-1, "Błąd instalacji Java: ${e.localizedMessage}")
+            onProgress(-1, "Błąd instalacji OpenJDK 25: ${e.localizedMessage}")
             false
         }
     }
@@ -120,7 +148,7 @@ class JavaRuntimeManager(private val context: Context) {
             if (file.isDirectory) {
                 file.setExecutable(true, false)
                 file.setReadable(true, false)
-            } else if (file.parentFile?.name == "bin" || file.name == "java" || file.name.endsWith(".so")) {
+            } else if (file.parentFile?.name == "bin" || file.name == "java" || file.name.endsWith(".so") || file.name == "jspawnhelper" || file.name == "jexec") {
                 makeExecutable(file)
             }
         }
@@ -143,7 +171,7 @@ class JavaRuntimeManager(private val context: Context) {
                             fos.write(buffer, 0, len)
                         }
                     }
-                    if (newFile.parentFile?.name == "bin" || newFile.name == "java" || newFile.name.endsWith(".so")) {
+                    if (newFile.parentFile?.name == "bin" || newFile.name == "java" || newFile.name.endsWith(".so") || newFile.name == "jspawnhelper" || newFile.name == "jexec") {
                         makeExecutable(newFile)
                     }
                 }
@@ -153,7 +181,7 @@ class JavaRuntimeManager(private val context: Context) {
     }
 
     companion object {
-        // Stabilny headless OpenJDK 21 dla architektury ARM64 na Androidzie (zip)
-        const val DEFAULT_JRE_ARM64_URL = "https://github.com/zryyoung/openjdk-Termux/releases/download/openjdk-21.0.1/openjdk-21.0.1-aarch64.zip"
+        const val PRIMARY_JRE_ARM64_URL = "https://github.com/vipluk/MinecraftMobile/releases/download/v1.0.0-assets/openjdk-25-aarch64.zip"
+        const val FALLBACK_JRE_ARM64_URL = "http://34.185.160.5/openjdk-25-aarch64.zip"
     }
 }

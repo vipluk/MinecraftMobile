@@ -65,11 +65,11 @@ class ServerProcessManager(
         }
 
         scope.launch {
-            // 1. Sprawdź czy środowisko Java 21 jest pobrane
+            // 1. Sprawdź czy środowisko Java 25 jest pobrane
             if (!javaRuntimeManager.isJavaInstalled()) {
-                appendLog("=== POBIERANIE ŚRODOWISKA JAVA 21 (ARM64) ===")
-                appendLog("[Java] Brak zainstalowanego OpenJDK 21. Rozpoczynanie automatycznego pobierania...")
-                _serverState.update { it.copy(errorMessage = "Pobieranie środowiska Java 21...") }
+                appendLog("=== POBIERANIE ŚRODOWISKA JAVA 25 (ARM64) ===")
+                appendLog("[Java] Brak zainstalowanego OpenJDK 25. Rozpoczynanie automatycznego pobierania...")
+                _serverState.update { it.copy(errorMessage = "Pobieranie środowiska Java 25...") }
 
                 val javaSuccess = javaRuntimeManager.installJavaRuntime { percent, msg ->
                     _serverState.update { it.copy(errorMessage = msg) }
@@ -82,14 +82,14 @@ class ServerProcessManager(
                     _serverState.update {
                         it.copy(
                             status = ServerStatus.ERROR,
-                            errorMessage = "Błąd instalacji środowiska Java 21! Sprawdź połączenie z Internetem."
+                            errorMessage = "Błąd instalacji środowiska Java 25! Sprawdź połączenie z Internetem."
                         )
                     }
-                    appendLog("[BŁĄD] Nie udało się zainstalować środowiska Java 21.")
+                    appendLog("[BŁĄD] Nie udało się zainstalować środowiska Java 25.")
                     return@launch
                 }
 
-                appendLog("[Java] Środowisko OpenJDK 21 zainstalowane pomyślnie!")
+                appendLog("[Java] Środowisko OpenJDK 25 zainstalowane pomyślnie!")
             }
 
             // 2. Sprawdź czy silnik Folia 26.2 jest pobrany
@@ -156,8 +156,6 @@ class ServerProcessManager(
                 javaPath,
                 "-Xms512M",
                 "-Xmx${ramInt}G",
-                "-Djava.specification.version=25",
-                "-DPaper.IgnoreJavaVersion=true",
                 "-Djava.io.tmpdir=${tempDir.absolutePath}",
                 "-Dterminal.jline=false",
                 "-Dterminal.ansi=true",
