@@ -1,6 +1,11 @@
 package com.pearium.minecraftmobile.core
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -75,6 +80,122 @@ class ConfigManager(private val context: Context) {
         }
     }
 
+    fun getMotd(): String {
+        return readProperties()["motd"] ?: "§aMinecraft Mobile Server §7(Xiaomi 11T Pro)"
+    }
+
+    fun setMotd(motd: String) {
+        updateProperties(mapOf("motd" to motd))
+    }
+
+    fun ensureDefaultIcon() {
+        val iconFile = getServerIconFile()
+        if (!iconFile.exists()) {
+            try {
+                context.assets.open("server-icon.png").use { input ->
+                    FileOutputStream(iconFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                saveServerIcon(generatePresetIcon("grass"))
+            }
+        }
+    }
+
+    fun getServerIconFile(): File = File(serverDir, "server-icon.png")
+
+    fun getServerIconBitmap(): Bitmap? {
+        val file = getServerIconFile()
+        return if (file.exists() && file.length() > 0) {
+            try {
+                BitmapFactory.decodeFile(file.absolutePath)
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+    }
+
+    fun saveServerIcon(bitmap: Bitmap): Boolean {
+        return try {
+            val scaled = Bitmap.createScaledBitmap(bitmap, 64, 64, true)
+            FileOutputStream(getServerIconFile()).use { out ->
+                scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    fun generatePresetIcon(type: String): Bitmap {
+        if (type.lowercase() == "pearium") {
+            try {
+                context.assets.open("server-icon.png").use { stream ->
+                    val loaded = BitmapFactory.decodeStream(stream)
+                    if (loaded != null) return loaded
+                }
+            } catch (_: Exception) {}
+        }
+
+        val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val paint = Paint()
+
+        when (type.lowercase()) {
+            "creeper" -> {
+                paint.color = Color.parseColor("#44A836")
+                canvas.drawRect(0f, 0f, 64f, 64f, paint)
+                paint.color = Color.parseColor("#2F8325")
+                canvas.drawRect(0f, 0f, 32f, 32f, paint)
+                canvas.drawRect(48f, 48f, 64f, 64f, paint)
+                paint.color = Color.parseColor("#1B1B1B")
+                canvas.drawRect(12f, 16f, 24f, 28f, paint)
+                canvas.drawRect(40f, 16f, 52f, 28f, paint)
+                canvas.drawRect(24f, 28f, 40f, 44f, paint)
+                canvas.drawRect(16f, 36f, 24f, 52f, paint)
+                canvas.drawRect(40f, 36f, 48f, 52f, paint)
+            }
+            "diamond" -> {
+                paint.color = Color.parseColor("#1E5F74")
+                canvas.drawRect(0f, 0f, 64f, 64f, paint)
+                paint.color = Color.parseColor("#4DEEEA")
+                canvas.drawRect(16f, 16f, 48f, 48f, paint)
+                paint.color = Color.parseColor("#E0FFFF")
+                canvas.drawRect(20f, 20f, 32f, 32f, paint)
+                paint.color = Color.parseColor("#00B4D8")
+                canvas.drawRect(32f, 32f, 44f, 44f, paint)
+            }
+            "netherite" -> {
+                paint.color = Color.parseColor("#1C1A1D")
+                canvas.drawRect(0f, 0f, 64f, 64f, paint)
+                paint.color = Color.parseColor("#3B363C")
+                canvas.drawRect(8f, 8f, 56f, 56f, paint)
+                paint.color = Color.parseColor("#645967")
+                canvas.drawRect(16f, 16f, 48f, 48f, paint)
+                paint.color = Color.parseColor("#FFD166")
+                canvas.drawRect(28f, 28f, 36f, 36f, paint)
+            }
+            else -> { // "grass"
+                paint.color = Color.parseColor("#5A8F35")
+                canvas.drawRect(0f, 0f, 64f, 24f, paint)
+                paint.color = Color.parseColor("#866043")
+                canvas.drawRect(0f, 24f, 64f, 64f, paint)
+                paint.color = Color.parseColor("#4C782C")
+                canvas.drawRect(8f, 24f, 16f, 32f, paint)
+                canvas.drawRect(24f, 24f, 36f, 32f, paint)
+                canvas.drawRect(48f, 24f, 56f, 30f, paint)
+                paint.color = Color.parseColor("#694C35")
+                canvas.drawRect(12f, 40f, 20f, 48f, paint)
+                canvas.drawRect(40f, 46f, 50f, 56f, paint)
+            }
+        }
+        return bmp
+    }
+
     fun readRawFile(filename: String): String {
         val file = File(serverDir, filename)
         return if (file.exists()) file.readText() else ""
@@ -93,7 +214,7 @@ class ConfigManager(private val context: Context) {
             "difficulty" to "normal",
             "gamemode" to "survival",
             "max-players" to "20",
-            "online-mode" to "false", // Domyślnie pozwala na wejście bez problemów z autoryzacją
+            "online-mode" to "false",
             "pvp" to "true",
             "view-distance" to "8",
             "simulation-distance" to "6",

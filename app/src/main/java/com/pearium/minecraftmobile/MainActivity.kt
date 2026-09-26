@@ -156,6 +156,15 @@ class MainActivity : ComponentActivity() {
                     onSendCommand = { cmd ->
                         serverService?.processManager?.sendCommand(cmd)
                     },
+                    onUpdateMotd = { motd ->
+                        serverService?.processManager?.setMotd(motd)
+                    },
+                    onUpdateIcon = { bmp ->
+                        serverService?.processManager?.setServerIcon(bmp)
+                    },
+                    onSetPresetIcon = { type ->
+                        serverService?.processManager?.setPresetServerIcon(type)
+                    },
                     configManager = serverService?.configManager ?: ConfigManager(this),
                     pluginManager = serverService?.pluginManager ?: PluginManager(ConfigManager(this)),
                     tunnelManager = serverService?.tunnelManager ?: FRPClientManager(this)
@@ -228,6 +237,9 @@ fun MainContent(
     onVersionChange: (String) -> Unit,
     onDownloadVersion: (String) -> Unit,
     onSendCommand: (String) -> Unit,
+    onUpdateMotd: (String) -> Unit = {},
+    onUpdateIcon: (android.graphics.Bitmap) -> Unit = {},
+    onSetPresetIcon: (String) -> Unit = {},
     configManager: ConfigManager,
     pluginManager: PluginManager,
     tunnelManager: FRPClientManager
@@ -282,7 +294,11 @@ fun MainContent(
                     onCoresChange = onCoresChange,
                     onVersionChange = onVersionChange,
                     onDownloadVersion = onDownloadVersion,
-                    onNavigateToConsole = { selectedScreenIndex = 1 }
+                    onNavigateToConsole = { selectedScreenIndex = 1 },
+                    configManager = configManager,
+                    onUpdateMotd = onUpdateMotd,
+                    onUpdateIcon = onUpdateIcon,
+                    onSetPresetIcon = onSetPresetIcon
                 )
                 1 -> ConsoleScreen(
                     logs = logs,

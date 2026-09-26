@@ -84,6 +84,70 @@ import com.pearium.minecraftmobile.ui.theme.TextPrimary
 import com.pearium.minecraftmobile.ui.theme.TextSecondary
 import com.pearium.minecraftmobile.ui.theme.WarningYellow
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.withStyle
+import com.pearium.minecraftmobile.core.ConfigManager
+
+fun parseMinecraftMotd(motd: String): AnnotatedString {
+    return buildAnnotatedString {
+        var currentColor = Color(0xFFAAAAAA)
+        var isBold = false
+        var isItalic = false
+
+        var i = 0
+        while (i < motd.length) {
+            val c = motd[i]
+            if ((c == '§' || c == '&') && i + 1 < motd.length) {
+                when (motd[i + 1].lowercaseChar()) {
+                    '0' -> { currentColor = Color(0xFF000000); isBold = false; isItalic = false }
+                    '1' -> { currentColor = Color(0xFF0000AA); isBold = false; isItalic = false }
+                    '2' -> { currentColor = Color(0xFF00AA00); isBold = false; isItalic = false }
+                    '3' -> { currentColor = Color(0xFF00AAAA); isBold = false; isItalic = false }
+                    '4' -> { currentColor = Color(0xFFAA0000); isBold = false; isItalic = false }
+                    '5' -> { currentColor = Color(0xFFAA00AA); isBold = false; isItalic = false }
+                    '6' -> { currentColor = Color(0xFFFFAA00); isBold = false; isItalic = false }
+                    '7' -> { currentColor = Color(0xFFAAAAAA); isBold = false; isItalic = false }
+                    '8' -> { currentColor = Color(0xFF555555); isBold = false; isItalic = false }
+                    '9' -> { currentColor = Color(0xFF5555FF); isBold = false; isItalic = false }
+                    'a' -> { currentColor = Color(0xFF55FF55); isBold = false; isItalic = false }
+                    'b' -> { currentColor = Color(0xFF55FFFF); isBold = false; isItalic = false }
+                    'c' -> { currentColor = Color(0xFFFF5555); isBold = false; isItalic = false }
+                    'd' -> { currentColor = Color(0xFFFF55FF); isBold = false; isItalic = false }
+                    'e' -> { currentColor = Color(0xFFFFFF55); isBold = false; isItalic = false }
+                    'f' -> { currentColor = Color(0xFFFFFFFF); isBold = false; isItalic = false }
+                    'l' -> isBold = true
+                    'o' -> isItalic = true
+                    'r' -> { currentColor = Color(0xFFAAAAAA); isBold = false; isItalic = false }
+                }
+                i += 2
+                continue
+            }
+            withStyle(
+                SpanStyle(
+                    color = currentColor,
+                    fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+                    fontStyle = if (isItalic) FontStyle.Italic else FontStyle.Normal
+                )
+            ) {
+                append(c)
+            }
+            i++
+        }
+    }
+}
+
 @Composable
 fun DashboardScreen(
     serverState: ServerState,
@@ -93,7 +157,11 @@ fun DashboardScreen(
     onCoresChange: (Int) -> Unit,
     onVersionChange: (String) -> Unit,
     onDownloadVersion: (String) -> Unit,
-    onNavigateToConsole: () -> Unit
+    onNavigateToConsole: () -> Unit,
+    configManager: ConfigManager? = null,
+    onUpdateMotd: (String) -> Unit = {},
+    onUpdateIcon: (Bitmap) -> Unit = {},
+    onSetPresetIcon: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -110,6 +178,30 @@ fun DashboardScreen(
     }
 
     var versionDropdownExpanded by remember { mutableStateOf(false) }
+
+    var motdText by remember(serverState.motd) { mutableStateOf(serverState.motd) }
+    var serverIconBitmap by remember(serverState.hasCustomIcon) { mutableStateOf(configManager?.getServerIconBitmap()) }
+    var isEditingAppearance by remember { mutableStateOf(false) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val original = BitmapFactory.decodeStream(stream)
+                    if (original != null) {
+                        val scaled = Bitmap.createScaledBitmap(original, 64, 64, true)
+                        serverIconBitmap = scaled
+                        onUpdateIcon(scaled)
+                        Toast.makeText(context, "Zaktualizowano awatar serwera (64x64)!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Błąd wczytywania zdjęcia: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -652,6 +744,264 @@ fun DashboardScreen(
             }
         }
 
+        // 5b. Karta Wyglądu Serwera (Awatar i Opis MOTD)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = CardBackground),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Palette,
+                            contentDescription = null,
+                            tint = EmeraldGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "WYGLĄD NA LIŚCIE MINECRAFT",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    }
+
+                    Text(
+                        text = if (isEditingAppearance) "Zwiń edytor" else "Edytuj wygląd",
+                        color = MintAccent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { isEditingAppearance = !isEditingAppearance }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Realistyczny podgląd wpisu na liście serwerów Minecraft PC
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF0C0E12))
+                        .border(1.dp, Color(0xFF222933), RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (serverIconBitmap != null) {
+                        Image(
+                            bitmap = serverIconBitmap!!.asImageBitmap(),
+                            contentDescription = "Awatar serwera",
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .border(1.dp, CardBorder, RoundedCornerShape(4.dp))
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(DarkEmerald),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Dns,
+                                contentDescription = null,
+                                tint = MintAccent,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "pearium.com",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${serverState.playersOnline}/${serverState.maxPlayers}",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Speed,
+                                    contentDescription = "Ping",
+                                    tint = EmeraldGreen,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = parseMinecraftMotd(motdText),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 15.sp,
+                            maxLines = 2
+                        )
+                    }
+                }
+
+                if (isEditingAppearance) {
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Sekcja 1: Zmiana Awatara (64x64 PNG)
+                    Text(
+                        text = "AWATAR SERWERA (64x64 PNG)",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { photoPickerLauncher.launch("image/*") },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = DarkEmerald),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(imageVector = Icons.Default.Image, contentDescription = null, tint = MintAccent, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Własne zdjęcie", color = MintAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = {
+                                onSetPresetIcon("pearium")
+                                serverIconBitmap = configManager?.getServerIconBitmap()
+                                Toast.makeText(context, "Ustawiono logo Pearium!", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CardBackground),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+                        ) {
+                            Text("🍐 Pearium", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Button(
+                            onClick = {
+                                onSetPresetIcon("grass")
+                                serverIconBitmap = configManager?.getServerIconBitmap()
+                                Toast.makeText(context, "Ustawiono blok trawy!", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CardBackground),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+                        ) {
+                            Text("🌿 Trawa", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Sekcja 2: Edycja Opisu (MOTD) z paletą kolorów
+                    Text(
+                        text = "OPIS SERWERA (MOTD Z KOLORAMI)",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedTextField(
+                        value = motdText,
+                        onValueChange = { motdText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Treść MOTD (użyj §a, §b itp.)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EmeraldGreen,
+                            unfocusedBorderColor = CardBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        singleLine = false,
+                        maxLines = 2
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Pasek narzędzi z kolorami Minecraft
+                    Text("Kliknij kolor, aby wstawić kod:", color = TextSecondary, fontSize = 10.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val colorChips = listOf(
+                            Triple("Zielony", "§a", Color(0xFF55FF55)),
+                            Triple("Błękit", "§b", Color(0xFF55FFFF)),
+                            Triple("Złoty", "§6", Color(0xFFFFAA00)),
+                            Triple("Czerwień", "§c", Color(0xFFFF5555)),
+                            Triple("Żółty", "§e", Color(0xFFFFFF55)),
+                            Triple("Biały", "§f", Color(0xFFFFFFFF)),
+                            Triple("Pogrub", "§l", TextPrimary),
+                            Triple("Reset", "§r", TextSecondary)
+                        )
+
+                        colorChips.forEach { (label, code, chipColor) ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(chipColor.copy(alpha = 0.15f))
+                                    .border(1.dp, chipColor.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                                    .clickable { motdText += code }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(text = code, color = chipColor, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            onUpdateMotd(motdText)
+                            Toast.makeText(context, "Zapisano opis MOTD w server.properties!", Toast.LENGTH_SHORT).show()
+                            isEditingAppearance = false
+                        },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen)
+                    ) {
+                        Icon(imageVector = Icons.Default.Brush, contentDescription = null, tint = ObsidianDark, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Zapisz Wygląd Serwera", color = ObsidianDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
         // 6. Karta Monitora Sprzętowego (Live Telemetria RAM i CPU Cores)
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -834,84 +1184,154 @@ fun DashboardScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                    text = "WYKORZYSTANIE RDZENI PROCESORA (Snapdragon 888)",
-                    color = TextSecondary,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
-                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "RDZENIE PROCESORA (Snapdragon 888 Tri-Cluster)",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        text = "8 rdzeni",
+                        color = MintAccent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Wykres słupkowy obciążenia każdego z rdzeni CPU
-                val coresCount = serverState.totalCores
-                val coreUsages = if (serverState.coreUsageList.isNotEmpty()) {
-                    serverState.coreUsageList
-                } else {
-                    List(coresCount) { 0f }
+                // Lista telemetrii dla 8 rdzeni z taktowaniem i rolą
+                val telemetryList = serverState.coreTelemetryList.ifEmpty {
+                    (0 until 8).map { i ->
+                        val (name, cluster, role, maxGhz) = when (i) {
+                            in 0..3 -> listOf("Cortex-A55", "Silver", "Energooszczędny", 1.80f)
+                            in 4..6 -> listOf("Cortex-A78", "Gold", "Wydajny", 2.42f)
+                            else -> listOf("Cortex-X1", "Prime", "Superwydajny", 2.84f)
+                        }
+                        com.pearium.minecraftmobile.core.CoreTelemetry(
+                            coreIndex = i,
+                            coreName = name as String,
+                            clusterType = cluster as String,
+                            role = role as String,
+                            maxFreqGhz = maxGhz as Float,
+                            curFreqMhz = when (i) { in 0..3 -> 1804; in 4..6 -> 2419; else -> 2841 },
+                            usagePercent = serverState.coreUsageList.getOrElse(i) { 0f },
+                            isAllocated = i >= (8 - serverState.allocatedCores)
+                        )
+                    }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(ObsidianDark)
-                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    for (i in 0 until coresCount) {
-                        val usage = coreUsages.getOrElse(i) { 0f }
-                        val isAllocated = i < serverState.allocatedCores
-                        val barColor = if (!isAllocated) {
-                            TextSecondary.copy(alpha = 0.3f)
-                        } else if (usage > 80f) {
-                            DangerRed
-                        } else if (usage > 50f) {
-                            WarningYellow
-                        } else {
-                            EmeraldGreen
-                        }
+                // 2 rzędy po 4 rdzenie
+                val row1 = telemetryList.take(4)
+                val row2 = telemetryList.drop(4)
 
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = "${usage.toInt()}%",
-                                color = if (isAllocated) barColor else TextSecondary,
-                                fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Box(
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Rząd 1: Energooszczędne Cortex-A55 (R1-R4)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        row1.forEach { core ->
+                            val isAllocated = core.isAllocated
+                            val usage = core.usagePercent
+                            val barColor = if (!isAllocated) TextSecondary.copy(alpha = 0.3f)
+                            else if (usage > 80f) DangerRed
+                            else if (usage > 40f) WarningYellow
+                            else EmeraldGreen
+
+                            Column(
                                 modifier = Modifier
-                                    .width(14.dp)
-                                    .height(44.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(CardBackground),
-                                contentAlignment = Alignment.BottomCenter
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isAllocated) ObsidianDark else CardBackground)
+                                    .border(1.dp, if (isAllocated) barColor.copy(alpha = 0.4f) else CardBorder, RoundedCornerShape(8.dp))
+                                    .padding(6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .fillMaxHeight((usage / 100f).coerceIn(0.08f, 1f))
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(barColor)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("R${core.coreIndex + 1}", color = if (isAllocated) TextPrimary else TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("Silver", color = TextSecondary, fontSize = 8.sp)
+                                }
+                                Text("A55", color = TextSecondary, fontSize = 9.sp)
+                                Text("${String.format("%.2f", core.curFreqMhz / 1000f)}G", color = MintAccent, fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.height(3.dp))
+                                LinearProgressIndicator(
+                                    progress = { (usage / 100f).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                                    color = barColor,
+                                    trackColor = CardBackground
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("${usage.toInt()}%", color = if (isAllocated) barColor else TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "R${i + 1}",
-                                color = if (isAllocated) TextPrimary else TextSecondary.copy(alpha = 0.5f),
-                                fontSize = 10.sp,
-                                fontWeight = if (isAllocated) FontWeight.Bold else FontWeight.Normal
-                            )
+                        }
+                    }
+
+                    // Rząd 2: Wydajne Cortex-A78 (R5-R7) oraz Ekstremalny Cortex-X1 (R8)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        row2.forEach { core ->
+                            val isAllocated = core.isAllocated
+                            val usage = core.usagePercent
+                            val isPrime = core.coreIndex == 7
+                            val barColor = if (!isAllocated) TextSecondary.copy(alpha = 0.3f)
+                            else if (usage > 80f) DangerRed
+                            else if (usage > 40f) WarningYellow
+                            else if (isPrime) MintAccent
+                            else EmeraldGreen
+
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isAllocated) ObsidianDark else CardBackground)
+                                    .border(1.dp, if (isPrime && isAllocated) MintAccent.copy(alpha = 0.6f) else if (isAllocated) barColor.copy(alpha = 0.4f) else CardBorder, RoundedCornerShape(8.dp))
+                                    .padding(6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("R${core.coreIndex + 1}", color = if (isAllocated) TextPrimary else TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text(if (isPrime) "PRIME" else "Gold", color = if (isPrime) MintAccent else WarningYellow, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Text(if (isPrime) "X1" else "A78", color = if (isPrime) MintAccent else TextSecondary, fontSize = 9.sp, fontWeight = if (isPrime) FontWeight.Bold else FontWeight.Normal)
+                                Text("${String.format("%.2f", core.curFreqMhz / 1000f)}G", color = if (isPrime) MintAccent else TextPrimary, fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.height(3.dp))
+                                LinearProgressIndicator(
+                                    progress = { (usage / 100f).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                                    color = barColor,
+                                    trackColor = CardBackground
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("${usage.toInt()}%", color = if (isAllocated) barColor else TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            }
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "• R1-R4: Energooszczędne Cortex-A55 (1.80 GHz) • R5-R7: Wydajne Cortex-A78 (2.42 GHz) • R8: Superwydajny Cortex-X1 (2.84 GHz)",
+                    color = TextSecondary,
+                    fontSize = 9.sp,
+                    lineHeight = 13.sp
+                )
             }
         }
 

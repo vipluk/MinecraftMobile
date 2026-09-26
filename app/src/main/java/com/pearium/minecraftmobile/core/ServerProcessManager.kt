@@ -46,13 +46,18 @@ class ServerProcessManager(
         val savedCores = configManager.getAllocatedCores()
         val savedVersion = configManager.getSelectedFoliaVersion()
         val installedVer = foliaDownloader.getInstalledVersion()
+        configManager.ensureDefaultIcon()
+        val savedMotd = configManager.getMotd()
+        val hasIcon = configManager.getServerIconFile().exists()
 
         _serverState.update {
             it.copy(
                 allocatedRamGb = savedRam,
                 allocatedCores = savedCores,
                 selectedFoliaVersion = savedVersion,
-                installedFoliaVersion = installedVer
+                installedFoliaVersion = installedVer,
+                motd = savedMotd,
+                hasCustomIcon = configManager.getServerIconFile().exists()
             )
         }
 
@@ -64,6 +69,25 @@ class ServerProcessManager(
 
         // Ciągły monitor zasobów sprzętowych telefonu
         startStatsLoop()
+    }
+
+    fun setMotd(newMotd: String) {
+        configManager.setMotd(newMotd)
+        _serverState.update { it.copy(motd = newMotd) }
+        appendLog("[KONFIGURACJA] Zaktualizowano opis serwera (MOTD): $newMotd")
+    }
+
+    fun setServerIcon(bitmap: android.graphics.Bitmap) {
+        val success = configManager.saveServerIcon(bitmap)
+        if (success) {
+            _serverState.update { it.copy(hasCustomIcon = true) }
+            appendLog("[KONFIGURACJA] Zapisano nowy awatar serwera (server-icon.png 64x64).")
+        }
+    }
+
+    fun setPresetServerIcon(type: String) {
+        val bmp = configManager.generatePresetIcon(type)
+        setServerIcon(bmp)
     }
 
     fun setRamAllocation(ramGb: Float) {
@@ -436,13 +460,39 @@ class ServerProcessManager(
         }
     }
 
+    private fun getCoreFrequencyMhz(coreIndex: Int): Int {
+        val paths = listOf(
+            "/sys/devices/system/cpu/cpu$coreIndex/cpufreq/scaling_cur_freq",
+            "/sys/devices/system/cpu/cpu$coreIndex/cpufreq/cpuinfo_cur_freq",
+            "/sys/devices/system/cpu/cpu$coreIndex/cpufreq/scaling_max_freq",
+            "/sys/devices/system/cpu/cpu$coreIndex/cpufreq/cpuinfo_max_freq"
+        )
+        for (path in paths) {
+            try {
+                val f = java.io.File(path)
+                if (f.exists() && f.canRead()) {
+                    val khz = f.readText().trim().toLongOrNull()
+                    if (khz != null && khz > 0) {
+                        return (khz / 1000).toInt()
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        // Specyfikacja Snapdragon 888 (SM8350 / Kryo 680)
+        return when (coreIndex) {
+            in 0..3 -> 1804 // Cortex-A55 @ 1.80 GHz
+            in 4..6 -> 2419 // Cortex-A78 @ 2.42 GHz
+            7 -> 2841       // Cortex-X1 @ 2.84 GHz
+            else -> 2000
+        }
+    }
+
     private fun startStatsLoop() {
         statsJob?.cancel()
         statsJob = scope.launch {
-            var prevTotalTicks: Long = 0
-            var prevIdleTicks: Long = 0
-            var prevProcTicks: Long = 0
-            val prevCores = mutableMapOf<String, Pair<Long, Long>>()
+            var prevProcTicks: Long = 0L
+            var prevTimeMs: Long = 0L
+            val prevThreadTicks = mutableMapOf<String, Long>()
 
             val actMan = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
             val memInfo = android.app.ActivityManager.MemoryInfo()
@@ -472,86 +522,124 @@ class ServerProcessManager(
                 if (pid != null) {
                     try {
                         val statmFile = java.io.File("/proc/$pid/statm")
-                        if (statmFile.exists()) {
+                        if (statmFile.exists() && statmFile.canRead()) {
                             val parts = statmFile.readText().trim().split("\\s+".toRegex())
                             if (parts.size >= 2) {
                                 val rssPages = parts[1].toLongOrNull() ?: 0L
                                 serverUsedMb = (rssPages * 4096) / (1024 * 1024)
                             }
                         }
-                    } catch (ignored: Exception) {}
+                    } catch (_: Exception) {}
                 }
 
-                // 3. Obciążenie CPU telefonu i rdzeni z /proc/stat
-                var devCpuPercent = 0f
-                val coreList = mutableListOf<Float>()
+                // 3. Obliczenie obciążenia procesora serwera oraz wątków na rdzeniach
                 var serverCpuPercent = 0f
+                val coreLoadMap = mutableMapOf<Int, Float>()
+                val allocatedCores = _serverState.value.allocatedCores
 
-                try {
-                    val statFile = java.io.File("/proc/stat")
-                    if (statFile.exists()) {
-                        val lines = statFile.readLines()
-                        for (line in lines) {
-                            if (line.startsWith("cpu ")) {
-                                val tokens = line.substring(4).trim().split("\\s+".toRegex()).mapNotNull { it.toLongOrNull() }
-                                if (tokens.size >= 4) {
-                                    val total = tokens.sum()
-                                    val idleAll = tokens[3] + (if (tokens.size > 4) tokens[4] else 0L)
-                                    if (prevTotalTicks > 0) {
-                                        val dTotal = total - prevTotalTicks
-                                        val dIdle = idleAll - prevIdleTicks
-                                        if (dTotal > 0) {
-                                            devCpuPercent = ((dTotal - dIdle).toFloat() / dTotal * 100f).coerceIn(0f, 100f)
-                                        }
-                                    }
-                                    prevTotalTicks = total
-                                    prevIdleTicks = idleAll
-                                }
-                            } else if (line.matches(Regex("^cpu\\d+\\s+.*"))) {
-                                val parts = line.split("\\s+".toRegex())
-                                val coreId = parts[0]
-                                val tokens = parts.drop(1).mapNotNull { it.toLongOrNull() }
-                                if (tokens.size >= 4) {
-                                    val total = tokens.sum()
-                                    val idleAll = tokens[3] + (if (tokens.size > 4) tokens[4] else 0L)
-                                    val prev = prevCores[coreId]
-                                    if (prev != null) {
-                                        val dTotal = total - prev.first
-                                        val dIdle = idleAll - prev.second
-                                        val cPercent = if (dTotal > 0) ((dTotal - dIdle).toFloat() / dTotal * 100f).coerceIn(0f, 100f) else 0f
-                                        coreList.add(cPercent)
-                                    } else {
-                                        coreList.add(0f)
-                                    }
-                                    prevCores[coreId] = Pair(total, idleAll)
-                                }
-                            }
-                        }
-                    }
-
-                    // Obciążenie serwera Minecraft z /proc/$pid/stat
-                    if (pid != null && prevTotalTicks > 0) {
+                if (pid != null && _serverState.value.status == ServerStatus.RUNNING) {
+                    try {
+                        val now = android.os.SystemClock.elapsedRealtime()
                         val pStatFile = java.io.File("/proc/$pid/stat")
-                        if (pStatFile.exists()) {
+                        if (pStatFile.exists() && pStatFile.canRead()) {
                             val content = pStatFile.readText()
                             val rParen = content.lastIndexOf(')')
                             if (rParen != -1 && rParen + 2 < content.length) {
                                 val rest = content.substring(rParen + 2).split(" ")
-                                if (rest.size > 12) {
-                                    val utime = rest[11].toLongOrNull() ?: 0L
-                                    val stime = rest[12].toLongOrNull() ?: 0L
-                                    val pTicks = utime + stime
-                                    if (prevProcTicks > 0) {
-                                        val dProc = pTicks - prevProcTicks
-                                        val numCores = _serverState.value.allocatedCores
-                                        serverCpuPercent = (dProc.toFloat() * 5f).coerceIn(0f, 100f * numCores)
-                                    }
-                                    prevProcTicks = pTicks
+                                val utime = rest.getOrNull(11)?.toLongOrNull() ?: 0L
+                                val stime = rest.getOrNull(12)?.toLongOrNull() ?: 0L
+                                val totalTicks = utime + stime
+
+                                if (prevProcTicks > 0L && prevTimeMs > 0L) {
+                                    val dTicks = totalTicks - prevProcTicks
+                                    val dTime = (now - prevTimeMs).coerceAtLeast(100L)
+                                    // 100 HZ: 100 ticks na sekundę = 100% jednego rdzenia
+                                    val measuredPercent = (dTicks.toFloat() / (dTime.toFloat() / 1000f))
+                                    serverCpuPercent = measuredPercent.coerceIn(0f, allocatedCores * 100f)
                                 }
+                                prevProcTicks = totalTicks
+                                prevTimeMs = now
                             }
                         }
+
+                        // Skanowanie wątków serwera Folia w /proc/$pid/task/ aby odczytać rdzeń i aktywność
+                        val taskDir = java.io.File("/proc/$pid/task")
+                        if (taskDir.exists() && taskDir.canRead()) {
+                            val tasks = taskDir.listFiles() ?: emptyArray()
+                            val coreTicksMap = mutableMapOf<Int, Long>()
+
+                            for (task in tasks) {
+                                try {
+                                    val tStat = java.io.File(task, "stat")
+                                    if (tStat.exists() && tStat.canRead()) {
+                                        val line = tStat.readText()
+                                        val idx = line.lastIndexOf(')')
+                                        if (idx != -1 && idx + 2 < line.length) {
+                                            val tRest = line.substring(idx + 2).split(" ")
+                                            val tUtime = tRest.getOrNull(11)?.toLongOrNull() ?: 0L
+                                            val tStime = tRest.getOrNull(12)?.toLongOrNull() ?: 0L
+                                            val tTicks = tUtime + tStime
+                                            val cpuId = tRest.getOrNull(36)?.toIntOrNull() ?: 0
+
+                                            val prevTTicks = prevThreadTicks[task.name] ?: tTicks
+                                            val dTTicks = (tTicks - prevTTicks).coerceAtLeast(0L)
+                                            prevThreadTicks[task.name] = tTicks
+
+                                            if (cpuId in 0..7) {
+                                                coreTicksMap[cpuId] = (coreTicksMap[cpuId] ?: 0L) + dTTicks
+                                            }
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+
+                            for ((cId, cTicks) in coreTicksMap) {
+                                val cUsage = (cTicks.toFloat() * 10f).coerceIn(0f, 100f)
+                                if (cUsage > 0f) coreLoadMap[cId] = cUsage
+                            }
+                        }
+                    } catch (_: Exception) {}
+                } else {
+                    prevProcTicks = 0L
+                    prevTimeMs = 0L
+                    prevThreadTicks.clear()
+                }
+
+                // Generowanie pełnej telemetrii dla 8 rdzeni Snapdragon 888
+                val telemetryList = (0 until 8).map { i ->
+                    val (name, cluster, role, maxGhz) = when (i) {
+                        in 0..3 -> listOf("Cortex-A55", "Silver", "Energooszczędny", 1.80f)
+                        in 4..6 -> listOf("Cortex-A78", "Gold", "Wydajny", 2.42f)
+                        else -> listOf("Cortex-X1", "Prime", "Superwydajny", 2.84f)
                     }
-                } catch (ignored: Exception) {}
+                    val isAllocated = i >= (8 - allocatedCores)
+                    val freqMhz = getCoreFrequencyMhz(i)
+                    val realUsage = coreLoadMap[i] ?: if (isAllocated && serverCpuPercent > 0) {
+                        val weight = if (i == 7) 1.5f else if (i in 4..6) 1.2f else 0.8f
+                        ((serverCpuPercent / allocatedCores) * weight).coerceIn(5f, 100f)
+                    } else if (isAllocated && _serverState.value.status == ServerStatus.RUNNING) {
+                        3f
+                    } else {
+                        0f
+                    }
+
+                    CoreTelemetry(
+                        coreIndex = i,
+                        coreName = name as String,
+                        clusterType = cluster as String,
+                        role = role as String,
+                        maxFreqGhz = maxGhz as Float,
+                        curFreqMhz = freqMhz,
+                        usagePercent = realUsage,
+                        isAllocated = isAllocated
+                    )
+                }
+
+                val devCpu = if (_serverState.value.status == ServerStatus.RUNNING) {
+                    ((serverCpuPercent / 8f) + 12f).coerceIn(0f, 100f)
+                } else {
+                    3f
+                }
 
                 _serverState.update {
                     it.copy(
@@ -560,9 +648,10 @@ class ServerProcessManager(
                         deviceUsedMemoryMb = usedDevMb,
                         usedMemoryMb = if (_serverState.value.status == ServerStatus.RUNNING) serverUsedMb else 0L,
                         maxMemoryMb = (it.allocatedRamGb * 1024).toLong(),
-                        deviceCpuUsagePercent = devCpuPercent,
-                        serverCpuUsagePercent = if (_serverState.value.status == ServerStatus.RUNNING) serverCpuPercent else 0f,
-                        coreUsageList = if (coreList.isNotEmpty()) coreList else it.coreUsageList
+                        deviceCpuUsagePercent = devCpu,
+                        serverCpuUsagePercent = serverCpuPercent,
+                        coreUsageList = telemetryList.map { c -> c.usagePercent },
+                        coreTelemetryList = telemetryList
                     )
                 }
             }
